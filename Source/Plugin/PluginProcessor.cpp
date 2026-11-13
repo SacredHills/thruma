@@ -142,6 +142,8 @@ void ThrumaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     previewEngine.prepare (sampleRate);
     previewEngine.setHitMonitor (&hitMonitor);
     replace.getSampleEngine().setHitMonitor (&hitMonitor);
+    previewEngine.setMixer (&mixer);
+    replace.getSampleEngine().setMixer (&mixer);
     numPending = 0;
 
     configureEngines();
@@ -852,6 +854,23 @@ void ThrumaProcessor::rebuildKit()
 {
     missingFiles.clear();
     kitPublisher.publish (kitManager.buildKit (currentRate, &missingFiles));
+    syncMixer();
+}
+
+void ThrumaProcessor::syncMixer()
+{
+    bool anySolo = false;
+    for (int i = 0; i < kNumKitSlots; ++i)
+    {
+        const auto m = kitManager.getSlot (i);
+        auto& s = mixer.slots[(size_t) i];
+        s.gain.store (m.volumeDb <= -99.0f ? 0.0f : juce::Decibels::decibelsToGain (m.volumeDb));
+        s.pan.store (m.pan);
+        s.mute.store (m.mute);
+        s.solo.store (m.solo);
+        anySolo = anySolo || m.solo;
+    }
+    mixer.anySolo.store (anySolo);
 }
 
 void ThrumaProcessor::commitTriggerEdit (std::vector<Trigger> newList, const juce::String& actionName, bool userEdit)

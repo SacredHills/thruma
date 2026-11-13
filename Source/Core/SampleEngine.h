@@ -35,6 +35,20 @@ struct HitMonitor
     std::array<Slot, kNumKitSlots> slots;
 };
 
+/** Per kit slot volume / pan / mute / solo (written by the UI, read by the audio thread), and a level meter. */
+struct SlotMixer
+{
+    struct Slot
+    {
+        std::atomic<float> gain { 1.0f };     // linear
+        std::atomic<float> pan { 0.0f };      // -1 left .. +1 right
+        std::atomic<bool>  mute { false }, solo { false };
+        std::atomic<float> meter { 0.0f };    // peak since the UI last read it (exchange 0)
+    };
+    std::array<Slot, kNumKitSlots> slots;
+    std::atomic<bool> anySolo { false };
+};
+
 class SampleEngine
 {
 public:
@@ -68,6 +82,8 @@ public:
     int getLastTriggeredLayer() const noexcept { return lastLayer; }
     /** Optional: report every kit hit here (nullptr = off). */
     void setHitMonitor (HitMonitor* m) noexcept { monitor = m; }
+    /** Optional: per-slot volume / pan / mute / solo applied to kit voices (nullptr = off). */
+    void setMixer (SlotMixer* m) noexcept { mixer = m; }
 
 private:
     struct Voice
@@ -83,6 +99,7 @@ private:
         int fadeOutLeft = -1, fadeOutLen = 0;  // -1 = not fading
         uint64_t age = 0;
         bool active = false;
+        float mixL = -1.0f, mixR = -1.0f;     // current mixer gains (ramped); -1 = not yet set
     };
 
     Voice* allocateVoice (int instrument) noexcept;
@@ -93,6 +110,7 @@ private:
     std::array<std::array<uint32_t, kMaxLayers>, kNumKitSlots> rrCounter {};
     std::array<std::array<int, kMaxLayers>, kNumKitSlots> lastRandom {};
     HitMonitor* monitor = nullptr;
+    SlotMixer* mixer = nullptr;
     uint64_t ageCounter = 0;
     uint32_t rng = 0x9E3779B9u;
     int fadeOutSamples = 128, fadeInSamples = 48;

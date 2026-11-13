@@ -461,6 +461,53 @@ int main()
         float padPk = 0;
         for (int blk = 0; blk < 6; ++blk) { p9->processBlock (buf, midi); padPk = std::max (padPk, buf.getMagnitude (0, 0, 512)); buf.clear(); midi.clear(); }
         check (hm.slots[(size_t) pad1].count.load() == before + 1 && padPk > 0.2f, "MIDI note " + juce::String (note1) + " plays the Tambourine pad");
+
+        // ---- mixer: volume / pan / mute / solo per slot ----
+        auto hitLR = [&] (int slot) -> std::pair<float, float>
+        {
+            float l = 0, r = 0;
+            p9->auditionSlot (slot, 1.0f);
+            for (int blk = 0; blk < 8; ++blk)
+            {
+                buf.clear(); midi.clear(); p9->processBlock (buf, midi);
+                l = std::max (l, buf.getMagnitude (0, 0, 512)); r = std::max (r, buf.getMagnitude (1, 0, 512));
+            }
+            for (int blk = 0; blk < 20; ++blk) { buf.clear(); p9->processBlock (buf, midi); }   // let it ring out
+            return { l, r };
+        };
+        const int sn = (int) Instrument::Snare;
+        auto hit2 = [&] (int slot) { const auto a = hitLR (slot), b = hitLR (slot); return std::make_pair (std::max (a.first, b.first), std::max (a.second, b.second)); };   // both round-robin files
+        hit2 (sn);   // warm-up: let earlier sounds die away
+        const auto centre = hit2 (sn);
+        km.setMix (sn, 0.0f, -1.0f, false, false); p9->syncMixer();
+        const auto left = hit2 (sn);
+        check (std::abs (centre.first - centre.second) < 0.01f && left.second < 0.001f && left.first > centre.first * 1.3f,
+               "pan hard left: right silent, mono sample constant-power (L " + juce::String (left.first, 2) + " vs centre " + juce::String (centre.first, 2) + ")");
+        km.setMix (sn, -6.0f, 0.0f, false, false); p9->syncMixer();
+        km.setMix (sn, 0.0f, 0.0f, false, false); p9->syncMixer();
+        const auto unity = hit2 (sn);   // same conditions as the -6 dB measurement
+        km.setMix (sn, -6.0f, 0.0f, false, false); p9->syncMixer();
+        const auto quiet = hit2 (sn);
+        check (std::abs (quiet.first / unity.first - 0.501f) < 0.01f, "volume -6 dB halves the level (" + juce::String (quiet.first / unity.first, 3) + ")");
+        km.setMix (sn, 0.0f, 0.0f, true, false); p9->syncMixer();
+        check (hitLR (sn).first < 0.001f, "mute silences the drum");
+        km.setMix (sn, 0.0f, 0.0f, false, false); km.setMix (pad1, 0.0f, 0.0f, false, true); p9->syncMixer();
+        check (hitLR (sn).first < 0.001f && hitLR (pad1).first > 0.2f, "solo on a pad silences the other drums");
+        km.setMix (pad1, 0.0f, 0.0f, false, false); km.setMix (sn, -3.0f, 0.4f, false, false); p9->syncMixer();
+        hitLR (sn);
+        check (p9->getMixer().slots[(size_t) sn].meter.exchange (0.0f) > 0.1f, "the snare's mixer meter moves");
+        km.saveKitFile (kf); km.clearAll(); km.loadKitFile (kf);
+        check (std::abs (km.getSlot (sn).volumeDb + 3.0f) < 0.01f && std::abs (km.getSlot (sn).pan - 0.4f) < 0.01f, "mixer settings are saved with the kit");
+
+        // ---- crash 2: its own kit piece and note ----
+        check (guessInstrumentFromName ("Crash 2_rr1") == Instrument::Crash2 && guessInstrumentFromName ("crash_18") == Instrument::Crash,
+               "file names: Crash 2 vs Crash");
+        km.assignFiles ((int) Instrument::Crash2, { dir.getChildFile ("Snare_rr1.wav") });
+        p9->rebuildKit(); pump (50);
+        const auto c2 = hm.slots[(size_t) Instrument::Crash2].count.load();
+        buf.clear(); midi.clear(); midi.addEvent (juce::MidiMessage::noteOn (10, 57, (juce::uint8) 100), 10);
+        p9->processBlock (buf, midi);
+        check (hm.slots[(size_t) Instrument::Crash2].count.load() == c2 + 1, "MIDI note 57 plays Crash 2");
     }
 
     // ---- 6) stopped host: the playhead stays put ----

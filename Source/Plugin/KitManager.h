@@ -27,6 +27,9 @@ public:
         RoundRobinMode rrMode = RoundRobinMode::Cycle;
         int midiNote = 36;          // pads: -1 = none yet
         juce::String name;          // pads only (empty = "Pad N")
+        float volumeDb = 0.0f;      // mixer
+        float pan = 0.0f;           // -1 .. +1
+        bool mute = false, solo = false;
         bool isEmpty() const { for (auto& l : layers) if (! l.files.isEmpty()) return false; return true; }
     };
 
@@ -42,6 +45,8 @@ public:
     int getNumUsedPads() const;
     /** A MIDI note no other slot uses (prefers General MIDI percussion notes). */
     int findFreeMidiNote() const;
+    /** Mixer settings only (volume / pan / mute / solo); no kit rebuild needed. */
+    void setMix (int slot, float volumeDb, float pan, bool mute, bool solo);
     juce::String getKitName() const;
     void setKitName (const juce::String& n);
 

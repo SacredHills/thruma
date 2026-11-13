@@ -118,6 +118,9 @@ public:
     void auditionSlot (int slot, float velocity);
     /** Which sample each kit slot played last (Player highlights, Samples page). */
     const HitMonitor& getHitMonitor() const { return hitMonitor; }
+    /** MIXER: volume / pan / mute / solo per kit slot (from the kit model), and per-slot meters. */
+    void syncMixer();
+    SlotMixer& getMixer() { return mixer; }
 
     // --- offline analysis: the whole track (from the host) or an imported file ---
     enum class OfflineSource { None, HostTrack, Heard, File };
@@ -204,6 +207,7 @@ private:
     DebleedProcessor debleed;
     SampleEngine previewEngine;
     HitMonitor hitMonitor;
+    SlotMixer mixer;
     struct Audition { int slot; float velocity; };
     std::array<Audition, 32> auditionQueue {};
     juce::AbstractFifo auditionFifo { 32 };

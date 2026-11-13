@@ -27,6 +27,17 @@ void KitManager::setSlotName (int i, const juce::String& name)
     if (isPadSlot (i)) slots[(size_t) i].name = name.trim();
 }
 
+void KitManager::setMix (int i, float volumeDb, float pan, bool mute, bool solo)
+{
+    std::lock_guard<std::recursive_mutex> l (mutex);
+    if (i < 0 || i >= kNumKitSlots) return;
+    auto& s = slots[(size_t) i];
+    s.volumeDb = juce::jlimit (-100.0f, 12.0f, volumeDb);
+    s.pan = juce::jlimit (-1.0f, 1.0f, pan);
+    s.mute = mute;
+    s.solo = solo;
+}
+
 int KitManager::getNumUsedPads() const
 {
     std::lock_guard<std::recursive_mutex> l (mutex);
@@ -272,6 +283,10 @@ juce::var KitManager::toVar() const
         else
             o->setProperty ("instrument", getInstrumentName ((Instrument) i));
         o->setProperty ("midiNote", s.midiNote);
+        o->setProperty ("volumeDb", s.volumeDb);
+        o->setProperty ("pan", s.pan);
+        if (s.mute) o->setProperty ("mute", true);
+        if (s.solo) o->setProperty ("solo", true);
         o->setProperty ("roundRobin", s.rrMode == RoundRobinMode::Cycle ? "cycle" : "random");
         juce::Array<juce::var> layers;
         for (auto& L : s.layers)
@@ -317,6 +332,10 @@ void KitManager::fromVar (const juce::var& v)
             if (idx < 0) continue;
             auto& s = slots[(size_t) idx];
             s.midiNote = juce::jlimit (0, 127, (int) iv.getProperty ("midiNote", s.midiNote));
+            s.volumeDb = juce::jlimit (-100.0f, 12.0f, (float) (double) iv.getProperty ("volumeDb", 0.0));
+            s.pan = juce::jlimit (-1.0f, 1.0f, (float) (double) iv.getProperty ("pan", 0.0));
+            s.mute = (bool) iv.getProperty ("mute", false);
+            s.solo = (bool) iv.getProperty ("solo", false);
             s.rrMode = iv.getProperty ("roundRobin", "cycle").toString() == "random" ? RoundRobinMode::Random : RoundRobinMode::Cycle;
             if (auto* layers = iv.getProperty ("layers", {}).getArray())
             {

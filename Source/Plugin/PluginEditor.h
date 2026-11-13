@@ -6,6 +6,7 @@
 #include "UI/ReplacePage.h"
 #include "UI/SamplesPage.h"
 #include "UI/PlayerPage.h"
+#include "UI/MixerPage.h"
 
 namespace thruma
 {
@@ -27,9 +28,10 @@ private:
     ui::ThrumaLookAndFeel lnf;
     juce::TooltipWindow tooltips { this, 700 };
 
-    static constexpr int kNumTabs = 4;     // index: 0 DEBLEED, 1 REPLACE, 2 SAMPLES, 3 PLAYER (saved in projects)
+    static constexpr int kNumTabs = 5;     // index: 0 DEBLEED, 1 REPLACE, 2 SAMPLES, 3 PLAYER, 4 MIXER (saved in projects)
     std::array<juce::TextButton, kNumTabs> tabs;
     ui::PlayerPage playerPage;
+    ui::MixerPage mixerPage;
     ui::ReplacePage replacePage;
     ui::DebleedPage debleedPage;
     ui::SamplesPage samplesPage;

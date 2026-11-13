@@ -38,6 +38,9 @@ private:
     juce::Path slotPath (int slot) const;            // all spots of a drum, in component coordinates
     juce::Rectangle<float> padBounds (int pad) const; // pad index 0.. (shown pads + the "+" pad)
     int numPadTiles() const;
+    int padsPerRow() const;
+    int padRows() const;
+    int padsHeight() const;
     int slotAt (juce::Point<float> p) const;
     void showMenu (int slot);
     void chooseFiles (int slot, bool add, bool folder);

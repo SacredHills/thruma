@@ -21,6 +21,7 @@ namespace
         { "Ride",   "RD", 2500.0f,    0.0f, 3000.0f,    0.0f, 1.5f, 3.0f, 3.5f, 45.0f, -18.0f, 24.0f, 0.5f, 800.0f, 51, 5.5f },
         { "China",  "CH", 2000.0f,    0.0f, 2500.0f,    0.0f, 1.5f, 3.0f, 4.0f, 80.0f, -18.0f, 20.0f, 0.2f, 700.0f, 52, 5.5f },
         { "Splash", "SP", 3500.0f,    0.0f, 4000.0f,    0.0f, 1.5f, 3.0f, 3.0f, 60.0f, -18.0f, 20.0f, 0.2f, 400.0f, 55, 5.5f },
+        { "Crash 2","C2", 2500.0f,    0.0f, 3000.0f,    0.0f, 1.5f, 3.0f, 4.0f, 90.0f, -18.0f, 20.0f, 0.2f, 900.0f, 57, 5.5f },
     }};
 }
 
@@ -43,7 +44,12 @@ Instrument guessInstrumentFromName (const std::string& raw) noexcept
 
     if (has ("china"))                                  return Instrument::China;
     if (has ("splash"))                                 return Instrument::Splash;
-    if (has ("crash"))                                  return Instrument::Crash;
+    if (has ("crash"))
+    {
+        for (const char* k : { "crash2", "crash 2", "crash_2", "crash-2", "crash b", "crash_b", "crash r", "crash_r", "right crash", "crash right" })
+            if (has (k)) return Instrument::Crash2;
+        return Instrument::Crash;
+    }
     if (has ("ride"))                                   return Instrument::Ride;
     if (has ("hihat") || has ("hi-hat") || has ("hi hat") || has ("hat") || has ("hh")) return Instrument::HiHat;
     if (has ("kick") || has ("bassdrum") || has ("bass drum") || has ("bd_") || has ("kd")) return Instrument::Kick;

@@ -34,7 +34,8 @@ target_sources(Thruma PRIVATE
     UI/ReplacePage.cpp
     UI/DebleedPage.cpp
     UI/SamplesPage.cpp
-    UI/PlayerPage.cpp)
+    UI/PlayerPage.cpp
+    UI/MixerPage.cpp)
 
 target_include_directories(Thruma PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 

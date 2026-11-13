@@ -22,12 +22,13 @@ enum class Instrument : int
     Ride,
     China,
     Splash,
+    Crash2,     // appended: earlier projects keep their instrument numbers
     Count
 };
 
 constexpr int kNumInstruments = static_cast<int> (Instrument::Count);
 /** Extra sample pads after the drums (cowbell, a second crash, stacks, FX...): MIDI / pad-triggered only. */
-constexpr int kNumPads = 16;
+constexpr int kNumPads = 32;
 /** Kit slots: the drums (0 .. kNumInstruments-1), then the pads. */
 constexpr int kNumKitSlots = kNumInstruments + kNumPads;
 constexpr bool isPadSlot (int slot) noexcept { return slot >= kNumInstruments && slot < kNumKitSlots; }

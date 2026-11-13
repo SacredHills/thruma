@@ -5,7 +5,7 @@ namespace thruma::ui
 {
 
 static constexpr float kPhotoW = 1672.0f, kPhotoH = 941.0f;   // the hotspots are measured on the original photo
-static constexpr int kPadH = 64, kFooterH = 26, kTopH = 40;
+static constexpr int kPadH = 58, kPadMinW = 100, kPadGap = 8, kMaxPadRows = 4, kFooterH = 26, kTopH = 40;
 
 PlayerPage::PlayerPage (ThrumaProcessor& p) : proc (p)
 {
@@ -26,7 +26,7 @@ PlayerPage::PlayerPage (ThrumaProcessor& p) : proc (p)
     r (I::HiHat, 175, 770, 320, 895);       // pedal
     e (I::Splash, 559, 207, 92, 20);
     e (I::Crash, 447, 133, 172, 40);
-    e (I::Crash, 1097, 133, 162, 42);
+    e (I::Crash2, 1097, 133, 162, 42);
     e (I::China, 1413, 113, 150, 38);
     e (I::Ride, 1425, 263, 212, 56);
 
@@ -64,9 +64,24 @@ int PlayerPage::numPadTiles() const
     return juce::jmin (kNumPads, proc.getKitManager().getNumUsedPads() + 1);   // + one empty pad to fill
 }
 
+int PlayerPage::padsPerRow() const
+{
+    return juce::jmax (1, (getWidth() - 24 + kPadGap) / (kPadMinW + kPadGap));
+}
+
+int PlayerPage::padRows() const
+{
+    return juce::jlimit (1, kMaxPadRows, (numPadTiles() + padsPerRow() - 1) / padsPerRow());
+}
+
+int PlayerPage::padsHeight() const
+{
+    return padRows() * (kPadH + 6);
+}
+
 juce::Rectangle<float> PlayerPage::imageBounds() const
 {
-    auto area = getLocalBounds().toFloat().withTrimmedTop ((float) kTopH).withTrimmedBottom ((float) (kPadH + kFooterH + 8));
+    auto area = getLocalBounds().toFloat().withTrimmedTop ((float) kTopH).withTrimmedBottom ((float) (padsHeight() + kFooterH + 8));
     const float scale = juce::jmin (area.getWidth() / kPhotoW, area.getHeight() / kPhotoH);
     return juce::Rectangle<float> (kPhotoW * scale, kPhotoH * scale).withCentre (area.getCentre());
 }
@@ -90,9 +105,11 @@ juce::Path PlayerPage::slotPath (int slot) const
 
 juce::Rectangle<float> PlayerPage::padBounds (int pad) const
 {
-    auto strip = getLocalBounds().toFloat().withTrimmedBottom ((float) kFooterH).removeFromBottom ((float) kPadH).reduced (12.0f, 4.0f);
-    const float w = juce::jmin (130.0f, (strip.getWidth() - 8.0f * (kNumPads - 1)) / (float) kNumPads * 2.0f);
-    return { strip.getX() + (float) pad * (w + 8.0f), strip.getY(), w, strip.getHeight() };
+    const int perRow = padsPerRow();
+    auto strip = getLocalBounds().toFloat().withTrimmedBottom ((float) kFooterH).removeFromBottom ((float) padsHeight()).reduced (12.0f, 0.0f);
+    const float w = juce::jmin (130.0f, (strip.getWidth() - (float) (kPadGap * (perRow - 1))) / (float) perRow);
+    const int row = pad / perRow, col = pad % perRow;
+    return { strip.getX() + (float) col * (w + (float) kPadGap), strip.getY() + (float) row * (float) (kPadH + 6) + 3.0f, w, (float) kPadH };
 }
 
 int PlayerPage::slotAt (juce::Point<float> p) const
@@ -159,7 +176,7 @@ void PlayerPage::paint (juce::Graphics& g)
     for (int slot = 0; slot < kNumInstruments; ++slot)
     {
         const float gl = glow[(size_t) slot];
-        const bool hot = slot == hover || slot == dropSlot;
+        const bool hot = slot == dropSlot;   // only while dropping files on it
         if (gl <= 0.0f && ! hot) continue;
         const auto path = slotPath (slot);
         if (path.isEmpty()) continue;
@@ -175,7 +192,7 @@ void PlayerPage::paint (juce::Graphics& g)
         }
         if (hot)
         {
-            g.setColour (slot == dropSlot ? colours::trigger : colours::text.withAlpha (0.8f));
+            g.setColour (colours::trigger);
             g.strokePath (path, juce::PathStrokeType (2.0f));
             const auto b = path.getBounds();
             const auto label = km.getSlotName (slot);
@@ -198,7 +215,7 @@ void PlayerPage::paint (juce::Graphics& g)
         const float gl = glow[(size_t) slot];
         g.setColour (colours::panelRaised.interpolatedWith (colours::accent, 0.55f * gl));
         g.fillRoundedRectangle (b, 8.0f);
-        g.setColour (slot == dropSlot ? colours::trigger : slot == hover ? colours::text.withAlpha (0.8f) : colours::outline);
+        g.setColour (slot == dropSlot ? colours::trigger : colours::outline);
         if (empty)
         {
             juce::Path outline;
@@ -230,10 +247,10 @@ void PlayerPage::paint (juce::Graphics& g)
 void PlayerPage::mouseMove (const juce::MouseEvent& e)
 {
     const int s = slotAt (e.position);
-    if (s != hover) { hover = s; setMouseCursor (s >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor); repaint(); }
+    if (s != hover) { hover = s; setMouseCursor (s >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor); }
 }
 
-void PlayerPage::mouseExit (const juce::MouseEvent&) { hover = -1; repaint(); }
+void PlayerPage::mouseExit (const juce::MouseEvent&) { hover = -1; }
 
 void PlayerPage::mouseDown (const juce::MouseEvent& e)
 {

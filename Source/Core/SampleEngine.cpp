@@ -176,6 +176,8 @@ void SampleEngine::triggerSample (const SampleData* s, int domain, uint64_t seq,
 
 void SampleEngine::render (float* const* out, int numChannels, int n) noexcept
 {
+    std::array<float, kNumKitSlots> peaks {};
+    const bool anySolo = mixer != nullptr && mixer->anySolo.load (std::memory_order_relaxed);
     for (auto& v : voices)
     {
         if (! v.active) continue;
@@ -193,6 +195,29 @@ void SampleEngine::render (float* const* out, int numChannels, int n) noexcept
         const float* srcR = s.getNumChannels() > 1 ? s.play[1].data() : srcL;
         const bool stereoSrc = s.getNumChannels() > 1;
 
+        // mixer (kit voices only): volume / mute / solo, and pan (balance for stereo samples, constant power
+        // for mono ones, 0 dB in the centre); ramped over the block so moves never click
+        float tL = 1.0f, tR = 1.0f;
+        const bool mixed = mixer != nullptr && v.domain == 0 && v.instrument >= 0 && v.instrument < kNumKitSlots;
+        if (mixed)
+        {
+            const auto& m = mixer->slots[(size_t) v.instrument];
+            float g = m.gain.load (std::memory_order_relaxed);
+            if (m.mute.load (std::memory_order_relaxed) || (anySolo && ! m.solo.load (std::memory_order_relaxed))) g = 0.0f;
+            const float pan = std::clamp (m.pan.load (std::memory_order_relaxed), -1.0f, 1.0f);
+            if (numChannels == 1) tL = tR = g;
+            else if (stereoSrc) { tL = g * std::min (1.0f, 1.0f - pan); tR = g * std::min (1.0f, 1.0f + pan); }
+            else
+            {
+                const float th = (pan + 1.0f) * 0.25f * 3.14159265f;
+                tL = g * 1.41421356f * std::cos (th);
+                tR = g * 1.41421356f * std::sin (th);
+            }
+        }
+        if (v.mixL < 0.0f) { v.mixL = tL; v.mixR = tR; }
+        const float dL = (tL - v.mixL) / (float) std::max (1, n - start), dR = (tR - v.mixR) / (float) std::max (1, n - start);
+        float mL = v.mixL, mR = v.mixR, pk = 0.0f;
+
         for (int i = start; i < n; ++i)
         {
             if (v.readPos >= v.end) { v.active = false; break; }
@@ -209,21 +234,37 @@ void SampleEngine::render (float* const* out, int numChannels, int n) noexcept
                 env *= (float) v.fadeOutLeft / (float) v.fadeOutLen;
                 --v.fadeOutLeft;
             }
+            mL += dL;
+            mR += dR;
 
             const auto p = (size_t) v.readPos;
             const float l = srcL[p], r = srcR[p];
             if (numChannels == 1)
             {
-                out[0][i] += (stereoSrc ? 0.5f * (l + r) : l) * v.gainL * env;
+                const float o = (stereoSrc ? 0.5f * (l + r) : l) * v.gainL * env * mL;
+                out[0][i] += o;
+                pk = std::max (pk, std::abs (o));
             }
             else
             {
-                out[0][i] += l * v.gainL * env;
-                out[1][i] += r * v.gainR * env;
+                const float oL = l * v.gainL * env * mL, oR = r * v.gainR * env * mR;
+                out[0][i] += oL;
+                out[1][i] += oR;
+                pk = std::max (pk, std::max (std::abs (oL), std::abs (oR)));
             }
             ++v.readPos;
         }
+        v.mixL = tL;
+        v.mixR = tR;
+        if (mixed) peaks[(size_t) v.instrument] = std::max (peaks[(size_t) v.instrument], pk);
     }
+    if (mixer != nullptr)
+        for (int i = 0; i < kNumKitSlots; ++i)
+            if (peaks[(size_t) i] > 0.0f)
+            {
+                auto& m = mixer->slots[(size_t) i].meter;
+                if (peaks[(size_t) i] > m.load (std::memory_order_relaxed)) m.store (peaks[(size_t) i], std::memory_order_relaxed);
+            }
 }
 
 void SampleEngine::releaseAll (int tag) noexcept

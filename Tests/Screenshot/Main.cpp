@@ -82,6 +82,13 @@ int main (int argc, char** argv)
             if (p == (s.length * 6 / 10) / 256 * 256) { juce::Thread::sleep (300); snap ("REPLACE", "replace_live.png"); }
             if (p == (s.length * 7 / 10) / 256 * 256) { tp->auditionSlot (thruma::kNumInstruments, 0.9f); tp->auditionSlot ((int) thruma::Instrument::Kick, 0.9f); snap ("PLAYER", "player.png"); }
             if (p == (s.length * 8 / 10) / 256 * 256) { snap ("SAMPLES", "samples.png"); }
+            if (p == (s.length * 9 / 10) / 256 * 256)
+            {
+                tp->getKitManager().setMix ((int) thruma::Instrument::Snare, -3.0f, -0.3f, false, false);
+                tp->getKitManager().setMix ((int) thruma::Instrument::Kick, 2.0f, 0.0f, false, true);
+                tp->syncMixer();
+                snap ("MIXER", "mixer.png");
+            }
         }
         juce::Thread::sleep (300);
         juce::MessageManager::callAsync ([&] { juce::MessageManager::getInstance()->stopDispatchLoop(); });

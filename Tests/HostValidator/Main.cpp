@@ -79,10 +79,11 @@ struct TestPlayHead : juce::AudioPlayHead
 {
     int64_t pos = 0;
     bool playing = true;
+    bool reportsPlayFlag = true;   // some hosts move the position but never set the play flag
     juce::Optional<PositionInfo> getPosition() const override
     {
         PositionInfo p;
-        p.setIsPlaying (playing);
+        p.setIsPlaying (playing && reportsPlayFlag);
         p.setTimeInSamples (pos);
         p.setTimeInSeconds ((double) pos / 48000.0);
         p.setBpm (120.0);
@@ -331,6 +332,25 @@ int main (int argc, char** argv)
         check (st.triggers >= 47 && st.triggers <= 49, "replaying a section re-detects without duplicates: " + juce::String (st.triggers));
         fresh->releaseResources();
         fresh->setPlayHead (nullptr);
+    }
+
+    // --- hosts that do not report the transport properly ---
+    for (int variant = 0; variant < 2; ++variant)
+    {
+        auto inst = vst3.createInstanceFromDescription (desc, 48000.0, 512, err);
+        TestPlayHead ph;
+        ph.reportsPlayFlag = false;
+        if (variant == 0) inst->setPlayHead (&ph);      // position moves, play flag never set
+        else inst->setPlayHead (nullptr);               // no position information at all
+        inst->prepareToPlay (48000.0, 512);
+        playTransport (*inst, ph, 480000, 6.0, 512);
+        const auto st = inspectState (*inst);
+        check (st.triggers >= 22 && st.triggers <= 25,
+               juce::String (variant == 0 ? "host without play flag" : "host without position") + ": notes still appear in the lane: "
+                   + juce::String (st.triggers) + " (expected 24)");
+        check (st.overview, juce::String (variant == 0 ? "host without play flag" : "host without position") + ": level history recorded");
+        inst->releaseResources();
+        inst->setPlayHead (nullptr);
     }
 
     // --- editor ---

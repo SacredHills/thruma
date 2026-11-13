@@ -115,7 +115,13 @@ void ReplacePage::timerCallback()
     for (auto& l : slot.layers) files += l.files.size();
 
     juce::String s;
-    s << (proc.isTransportPlaying() ? "Listening..." : "Stopped") << "\n\n";
+    switch (proc.getTransportMode())
+    {
+        case 1:  s << "Listening (following your DAW)"; break;
+        case 2:  s << "Listening (your DAW sends no song position, using Thruma's clock)"; break;
+        default: s << "Waiting for playback..."; break;
+    }
+    s << "\n\n";
     s << (src == TriggerSource::Edited ? "Playing your edited notes.\nClear to return to live detection."
                                        : "Live: hits are detected as the track plays.") << "\n\n";
     if (files == 0) s << "No samples for " << getInstrumentName ((Instrument) currentSlot()) << " yet: drop WAV files here or use SAMPLES. "

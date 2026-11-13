@@ -104,6 +104,14 @@ void TrackerLane::timerCallback()
         const double ph = (double) proc.getPlayheadPosition(), visible = getWidth() * spp;
         if (ph > viewStart + visible * 0.92 || ph < viewStart) viewStart = ph - visible * 0.15;
     }
+    // when stopped and nothing of the heard song is in view, show the most recent part of it
+    if (! proc.isTransportPlaying() && drag == Drag::None && juce::Time::getMillisecondCounter() - lastInteractionMs > 2500
+        && historyEnd() > historyStart())
+    {
+        const double visible = getWidth() * spp;
+        if (viewStart > (double) historyEnd() || viewStart + visible < (double) historyStart())
+            viewStart = std::max ((double) historyStart(), (double) historyEnd() - visible * 0.85);
+    }
     for (auto it = selected.begin(); it != selected.end();)
         it = proc.getTriggers().find (*it) == nullptr ? selected.erase (it) : std::next (it);
     updateScrollBar();
@@ -154,7 +162,8 @@ void TrackerLane::paint (juce::Graphics& g)
         {
             const auto a = ((int64_t) xToPos ((float) x) - origin) / bin, b = ((int64_t) xToPos ((float) x + 1.0f) - origin) / bin;
             float m = -200.0f;
-            for (auto i = std::max<int64_t> (0, a); i <= std::max (a, b) && i < (int64_t) lvl.size(); ++i) m = std::max (m, lvl[(size_t) i]);
+            const auto validBins = proc.getCapture().length.load() / bin;
+            for (auto i = std::max<int64_t> (0, a); i <= std::max (a, b) && i < (int64_t) lvl.size() && i < validBins; ++i) m = std::max (m, lvl[(size_t) i]);
             if (m < -150.0f) { if (open) { area.lineTo ((float) x, bottom); area.closeSubPath(); open = false; } continue; }
             if (! open) { area.startNewSubPath ((float) x, bottom); open = true; }
             area.lineTo ((float) x, dbToY (m));

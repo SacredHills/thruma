@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 
 #include <cstring>
+#include <limits>
 
 namespace thruma
 {
@@ -378,10 +379,41 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     juce::Optional<juce::AudioPlayHead::PositionInfo> pos;
     if (auto* ph = getPlayHead()) pos = ph->getPosition();
-    const bool playing = pos.hasValue() && pos->getIsPlaying();
-    const int64_t timeline = pos.hasValue() && pos->getTimeInSamples().hasValue() ? *pos->getTimeInSamples() : internalTimeline;
+
+    // Work out whether the song is playing and where we are. Not every host reports the play flag
+    // reliably, so a host position that moves forward block by block also counts as playing; with no
+    // usable host position at all, Thruma runs on its own clock while audio is coming in.
+    const bool hasTime = pos.hasValue() && pos->getTimeInSamples().hasValue();
+    const int64_t hostTime = hasTime ? *pos->getTimeInSamples() : 0;
+    const bool hostPlaying = pos.hasValue() && pos->getIsPlaying();
+    const bool advancing = hasTime && lastHostTime != std::numeric_limits<int64_t>::min() && hostTime == lastHostTime + lastHostBlock && hostTime != lastHostTime;
+    lastHostTime = hasTime ? hostTime : std::numeric_limits<int64_t>::min();
+    lastHostBlock = total;
+
+    float inPk = 0.0f;
+    for (int c = 0; c < juce::jmin (getTotalNumInputChannels(), getMainBusNumInputChannels()); ++c)
+        inPk = std::max (inPk, buffer.getMagnitude (c, 0, total));
+    if (inPk > 1.0e-4f) lastSignalBlockTime = internalTimeline;
+    const bool signalPresent = internalTimeline - lastSignalBlockTime < (int64_t) (2.0 * currentRate);
+
+    int newMode = 0;
+    if (hostPlaying || advancing) { newMode = 1; hostTimelineSeen = true; }   // follow the host transport
+    else if (! hostTimelineSeen && signalPresent) newMode = 2;              // host gives no position: own clock
+    if (newMode == 1 && lastActiveMode == 2)
+    {
+        // the host started reporting its transport: restart the history on the host timeline
+        capture.origin.store (-1);
+        capture.length.store (0);
+        logExpectedNext = -1;
+    }
+    if (newMode != 0) lastActiveMode = newMode;
+
+    const bool playing = newMode != 0;
+    const int64_t timeline = newMode == 1 ? hostTime : internalTimeline;
+    blockPlaying = playing;
     if (pos.hasValue() && pos->getBpm().hasValue()) lastBpm.store (*pos->getBpm());
     transportPlaying.store (playing);
+    transportMode.store (newMode);
     playhead.store (timeline);
 
     juce::MidiBuffer midiOut;
@@ -395,7 +427,8 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
                                     juce::MidiBuffer& midiOutBuf, const juce::Optional<juce::AudioPlayHead::PositionInfo>& pos,
                                     int64_t chunkTimeline)
 {
-    const bool playing = pos.hasValue() && pos->getIsPlaying();
+    const bool playing = blockPlaying;
+    juce::ignoreUnused (pos);
 
     auto mainBus = getBusBuffer (buffer, true, 0);
     const int nch = juce::jlimit (1, 2, juce::jmin (mainBus.getNumChannels(), mainChannels));

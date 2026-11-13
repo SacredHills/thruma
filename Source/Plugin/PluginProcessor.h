@@ -9,6 +9,7 @@
 #include "Triggers.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <limits>
 #include <juce_audio_utils/juce_audio_utils.h>
 
 namespace thruma
@@ -98,6 +99,8 @@ public:
     double getLastBpm() const { return lastBpm.load(); }
     int64_t getPlayheadPosition() const { return playhead.load(); }
     bool isTransportPlaying() const { return transportPlaying.load(); }
+    /** 0 = stopped, 1 = following the host transport, 2 = host gives no usable position: own clock. */
+    int getTransportMode() const { return transportMode.load(); }
 
     void previewSample (const juce::File& file);
 
@@ -222,6 +225,10 @@ private:
     std::atomic<double> lastBpm { 120.0 };
     std::atomic<int64_t> playhead { 0 };
     std::atomic<bool> transportPlaying { false };
+    std::atomic<int> transportMode { 0 };
+    int64_t lastHostTime = std::numeric_limits<int64_t>::min(), lastSignalBlockTime = -1000000000LL;
+    int lastHostBlock = 0, lastActiveMode = 0;
+    bool blockPlaying = false, hostTimelineSeen = false;
     int uiTab = 1;   // REPLACE
     std::unique_ptr<juce::ThreadPool> workers;
 

@@ -60,160 +60,90 @@ void ReductionDisplay::paint (juce::Graphics& g)
 //==============================================================================
 DebleedPage::DebleedPage (ThrumaProcessor& p)
     : proc (p),
-      dbOn (p.apvts, ids::dbOn, "Debleed", "Turn the debleed processor on (adds about 21 ms latency, compensated by the host)."),
+      dbOn (p.apvts, ids::dbOn, "Debleed", "Reduce bleed before the drum is detected and replaced (adds about 21 ms latency, compensated by the DAW)."),
       display (p),
-      instrument (p.apvts, ids::instrument, "Instrument", "The drum this mic is for (shared with the Replace page)."),
-      reference (p.apvts, ids::dbReference, "Reference", "Optional reference mic: the sidechain input or another linked Thruma instance."),
+      instrument (p.apvts, ids::instrument, "Instrument", "The drum on this track (shared with REPLACE)."),
       amount (p.apvts, ids::dbAmount, "Amount", "How strongly bleed is reduced."),
-      sensitivity (p.apvts, ids::dbSens, "Sensitivity", "How readily quiet hits (ghost notes) of the target drum are recognised and protected."),
-      attack (p.apvts, ids::dbAttack, "Attack Preservation", "Length of the untouched window at each hit."),
-      release (p.apvts, ids::dbRelease, "Release", "How quickly reduction returns after the drum - longer is smoother."),
-      maxRed (p.apvts, ids::dbMaxRed, "Max Reduction", "Deepest attenuation at 100 % Amount (never a hard gate)."),
-      smooth (p.apvts, ids::dbSmooth, "Smoothing", "Frequency smoothing of the reduction (avoids artifacts)."),
-      lowProtect (p.apvts, ids::dbLowProtect, "Low Protect", "Never reduce below this frequency."),
-      decay (p.apvts, ids::dbDecay, "Decay Scale", "Scales the learned drum decay that is always preserved."),
-      adaptive (p.apvts, ids::dbAdaptive, "Adaptive learning", "Keep refining the bleed estimate while playing.")
+      sensitivity (p.apvts, ids::dbSens, "Sensitivity", "How readily quiet hits of the drum (ghost notes) are recognised and kept."),
+      attack (p.apvts, ids::dbAttack, "Attack Preservation", "Keeps the start of every hit untouched."),
+      release (p.apvts, ids::dbRelease, "Release", "How smoothly the reduction lets go after each hit.")
 {
-    addAndMakeVisible (dbOn);
-    addAndMakeVisible (analyzeBtn);
-    addAndMakeVisible (advancedBtn);
-    analyzeBtn.setTooltip ("Debleed learns automatically while the track plays. 'Learn now' also picks the best reference "
-                           "input and suggests an Amount from everything heard so far.");
-    advancedBtn.setClickingTogglesState (true);
-    advancedBtn.onClick = [this] { showAdvanced = advancedBtn.getToggleState(); resized(); };
-    analyzeBtn.onClick = [this]
-    {
-        report.setText ("Analyzing...", juce::dontSendNotification);
-        juce::Component::SafePointer<DebleedPage> safe (this);
-        proc.analyseDebleed ([safe] (const juce::String& r) { if (safe != nullptr) safe->report.setText (r, juce::dontSendNotification); });
-    };
-
-    report.setColour (juce::Label::textColourId, colours::textDim);
-    report.setText (proc.getDebleedReport().isNotEmpty() ? proc.getDebleedReport()
-                                                         : "Debleed adapts automatically while the track plays.",
-                    juce::dontSendNotification);
-    addAndMakeVisible (report);
-    addAndMakeVisible (display);
-
-    addAndMakeVisible (mainPanel);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &instrument, &reference, &amount, &sensitivity, &attack, &release })
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &dbOn, &status, &display, &panel, &instrument, &refLabel, &reference,
+                                                                        &amount, &sensitivity, &attack, &release })
         addAndMakeVisible (c);
-
-    linkedLabel.setText ("LINKED SOURCE", juce::dontSendNotification);
-    linkedLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    linkedLabel.setColour (juce::Label::textColourId, colours::textDim);
-    addAndMakeVisible (linkedLabel);
-    linkedSource.setTextWhenNothingSelected ("(choose instance)");
-    linkedSource.setTooltip ("Another Thruma instance that shares its track (set 'Share this track as' there).");
-    linkedSource.onChange = [this] { proc.setLinkedSourceName (linkedSource.getText()); };
-    addAndMakeVisible (linkedSource);
-
-    shareLabel.setText ("SHARE THIS TRACK AS", juce::dontSendNotification);
-    shareLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    shareLabel.setColour (juce::Label::textColourId, colours::textDim);
-    addAndMakeVisible (shareLabel);
-    shareName.setText (proc.getPublishName(), juce::dontSendNotification);
-    shareName.setTextToShowWhenEmpty ("e.g. Kick In", colours::textDim);
-    shareName.setTooltip ("Make this track available as a reference for other Thruma instances in this project.");
-    shareName.onReturnKey = [this] { proc.setPublishName (shareName.getText()); };
-    shareName.onFocusLost = [this] { proc.setPublishName (shareName.getText()); };
-    addAndMakeVisible (shareName);
-
-    linkStatus.setColour (juce::Label::textColourId, colours::textDim);
-    linkStatus.setFont (juce::FontOptions (12.0f));
-    addAndMakeVisible (linkStatus);
-
-    addChildComponent (advPanel);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &maxRed, &smooth, &lowProtect, &decay, &adaptive })
-        addChildComponent (c);
-
-    mainPanel.toBack();
-    advPanel.toBack();
-    refreshLinkSources();
+    panel.toBack();
+    status.setColour (juce::Label::textColourId, colours::textDim);
+    refLabel.setText ("REFERENCE", juce::dontSendNotification);
+    refLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    refLabel.setColour (juce::Label::textColourId, colours::textDim);
+    reference.setTooltip ("Optional: another mic that carries the bleed (e.g. overheads or the kick). Pick the sidechain input "
+                          "or any other track that has Thruma on it.");
+    reference.onChange = [this] { referenceChosen(); };
+    refreshReferences();
     startTimerHz (25);
 }
 
-void DebleedPage::refreshLinkSources()
+void DebleedPage::refreshReferences()
 {
-    juce::StringArray names;
-    for (auto& s : LinkHub::getInstance().listSources())
-        if (juce::String (s.name) != proc.getPublishName()) names.add (s.name);
-    if (proc.getLinkedSourceName().isNotEmpty()) names.addIfNotAlreadyThere (proc.getLinkedSourceName());
-    if (names == lastSources) return;
-    lastSources = names;
-    linkedSource.clear (juce::dontSendNotification);
-    linkedSource.addItemList (names, 1);
-    linkedSource.setText (proc.getLinkedSourceName(), juce::dontSendNotification);
+    juce::StringArray items { "None", "Sidechain L", "Sidechain R", "Sidechain L+R" };
+    for (auto& n : proc.getOtherTrackNames()) items.add ("Track: " + n);
+    if (proc.getLinkedSourceName().isNotEmpty()) items.addIfNotAlreadyThere ("Track: " + proc.getLinkedSourceName());
+
+    const auto ref = (ReferenceSource) (int) proc.apvts.getRawParameterValue (ids::dbReference)->load();
+    const juce::String current = ref == ReferenceSource::Linked ? "Track: " + proc.getLinkedSourceName() : items[juce::jlimit (0, 3, (int) ref)];
+    if (items != lastItems)
+    {
+        lastItems = items;
+        reference.clear (juce::dontSendNotification);
+        reference.addItemList (items, 1);
+    }
+    if (reference.getText() != current) reference.setText (current, juce::dontSendNotification);
+}
+
+void DebleedPage::referenceChosen()
+{
+    const auto text = reference.getText();
+    int choice = 0;
+    if (text.startsWith ("Track: ")) { choice = (int) ReferenceSource::Linked; proc.setLinkedSourceName (text.fromFirstOccurrenceOf ("Track: ", false, false)); }
+    else choice = juce::jmax (0, juce::StringArray { "None", "Sidechain L", "Sidechain R", "Sidechain L+R" }.indexOf (text));
+    if (auto* prm = proc.apvts.getParameter (ids::dbReference))
+        prm->setValueNotifyingHost (prm->convertTo0to1 ((float) choice));
 }
 
 void DebleedPage::timerCallback()
 {
     display.update();
-    if (++tick % 12 == 0) refreshLinkSources();
-
+    if (++tick % 12 == 0) refreshReferences();
     const auto ref = (ReferenceSource) (int) proc.apvts.getRawParameterValue (ids::dbReference)->load();
-    const bool linked = ref == ReferenceSource::Linked;
-    linkedSource.setEnabled (linked);
     juce::String s;
-    if (ref == ReferenceSource::None) s = "Blind mode: bleed is identified from the drum's own hits and decay.";
-    else if (linked) s = proc.getLinkedSourceName().isEmpty() ? "Choose a linked instance."
-                       : proc.isLinkSynced() ? "Linked reference in sync." : "Linked reference waiting for playback...";
-    else s = proc.isSidechainConnected() ? "Sidechain reference connected." : "Route a reference mic to the sidechain input.";
-    linkStatus.setText (s, juce::dontSendNotification);
-    analyzeBtn.setEnabled (! proc.isAnalysing());
-    if (proc.getLearnStatus().isNotEmpty() && proc.isDebleedActive() && proc.getDebleedReport().isEmpty())
-        report.setText (proc.getLearnStatus(), juce::dontSendNotification);
+    if (! proc.isDebleedActive()) s = "Off. Turn on to clean up the drum before it is detected and replaced.";
+    else if (ref == ReferenceSource::None) s = "On. Bleed is recognised from the drum's own hits and decay. Learns while the track plays.";
+    else if (ref == ReferenceSource::Linked) s = proc.isLinkSynced() ? "On. Using the reference track." : "On. Waiting for the reference track to play...";
+    else s = proc.isSidechainConnected() ? "On. Using the sidechain reference." : "On. Route a reference mic to the sidechain input.";
+    status.setText (s, juce::dontSendNotification);
 }
 
 void DebleedPage::resized()
 {
     auto r = getLocalBounds().reduced (12);
     auto bar = r.removeFromTop (30);
-    dbOn.setBounds (bar.removeFromLeft (120));
-    analyzeBtn.setBounds (bar.removeFromLeft (100));
-    bar.removeFromLeft (14);
-    advancedBtn.setBounds (bar.removeFromRight (100));
-    report.setBounds (bar);
+    dbOn.setBounds (bar.removeFromLeft (130));
+    status.setBounds (bar);
     r.removeFromTop (8);
 
-    auto controls = r.removeFromBottom (196);
+    auto controls = r.removeFromBottom (170);
     r.removeFromBottom (10);
-    if (showAdvanced)
-    {
-        auto adv = r.removeFromBottom (120);
-        r.removeFromBottom (10);
-        advPanel.setBounds (adv);
-        auto c = advPanel.getContentBounds();
-        auto col1 = c.removeFromLeft ((c.getWidth() - 20) / 2);
-        c.removeFromLeft (20);
-        layoutRows (col1, { &maxRed, &smooth }, 30, 8);
-        layoutRows (c, { &lowProtect, &decay, &adaptive }, 26, 4);
-    }
-    for (juce::Component* comp : std::initializer_list<juce::Component*> { &advPanel, &maxRed, &smooth, &lowProtect, &decay, &adaptive })
-        comp->setVisible (showAdvanced);
     display.setBounds (r);
 
-    mainPanel.setBounds (controls);
-    auto c = mainPanel.getContentBounds();
-    auto left = c.removeFromLeft (juce::jmin (420, c.getWidth() / 2));
+    panel.setBounds (controls);
+    auto c = panel.getContentBounds();
+    auto left = c.removeFromLeft (juce::jmin (260, c.getWidth() / 3));
     c.removeFromLeft (24);
-    const int w = (left.getWidth() - 12) / 2;
-    auto row1 = left.removeFromTop (46);
-    instrument.setBounds (row1.removeFromLeft (w));
-    row1.removeFromLeft (12);
-    reference.setBounds (row1);
+    instrument.setBounds (left.removeFromTop (46));
     left.removeFromTop (10);
-    auto row2 = left.removeFromTop (46);
-    auto shareCol = row2.removeFromLeft (w);
-    shareLabel.setBounds (shareCol.removeFromTop (16));
-    shareName.setBounds (shareCol.removeFromTop (28));
-    row2.removeFromLeft (12);
-    linkedLabel.setBounds (row2.removeFromTop (16));
-    linkedSource.setBounds (row2.removeFromTop (28));
-    left.removeFromTop (8);
-    linkStatus.setBounds (left.removeFromTop (24));
-
-    layoutRows (c, { &amount, &sensitivity, &attack, &release }, 28, 8);
+    refLabel.setBounds (left.removeFromTop (16));
+    reference.setBounds (left.removeFromTop (28));
+    layoutRows (c, { &amount, &sensitivity, &attack, &release }, 28, 6);
 }
 
 } // namespace thruma::ui

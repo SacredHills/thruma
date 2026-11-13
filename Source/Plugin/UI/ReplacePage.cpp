@@ -3,267 +3,160 @@
 namespace thruma::ui
 {
 
-ReplacePage::ReplacePage (ThrumaProcessor& p)
-    : proc (p), scope (p),
-      debleedInput (p.apvts, ids::dbOn, "Debleed input", "Run the Debleed stage before trigger detection: cleaner triggering with less bleed. "
-                                                          "Adjust it on the DEBLEED page."),
-      wave (p),
-      repOn (p.apvts, ids::repOn, "Replace", "Turn drum replacement on or off (MIDI-triggered samples still play)."),
-      instrument (p.apvts, ids::instrument, "Instrument", "Which drum this track contains. Selects a tuned detection profile."),
-      sample (p.apvts, ids::repSample, "Sample", "Which kit slot plays for detected hits."),
-      source (p.apvts, ids::repSource, "Triggers", "Live detection, the edited trigger list below, or MIDI input only."),
-      mode (p.apvts, ids::repMode, "Mode", "Replace crossfades original and sample with Blend; Layer adds the sample on top."),
-      sensitivity (p.apvts, ids::repSens, "Sensitivity", "Higher catches quieter hits; lower rejects more bleed."),
-      velResp (p.apvts, ids::repVelResp, "Velocity Response", "0 % = every hit at full level, 100 % = follow the played dynamics."),
-      blend (p.apvts, ids::repBlend, "Blend", "Replace: original/sample balance. Layer: sample level."),
-      output (p.apvts, ids::repOutput, "Output", "Output level."),
-      ghost (p.apvts, ids::repGhost, "Ghost Notes", "Extends detection to quiet ghost notes (most useful on snare and hats)."),
-      retrig (p.apvts, ids::repRetrig, "Retrigger", "Minimum time between hits. 0 = instrument default."),
-      dynRange (p.apvts, ids::repDynRange, "Dynamic Range", "Level range mapped onto velocity 1-127."),
-      gain (p.apvts, ids::repGain, "Sample Gain", "Gain of the replacement sample."),
-      offset (p.apvts, ids::repOffset, "Sample Start", "Skip into the sample (trims its attack)."),
-      align (p.apvts, ids::repAlign, "Align", "Shift the replacement against the original (phase alignment)."),
-      doubleHits (p.apvts, ids::repDouble, "Double hits", "Detect flams, drags and fast doubles while the previous hit still rings."),
-      focus (p.apvts, ids::repFocus, "Frequency focus", "Reject hits whose spectrum does not match the instrument (false-trigger prevention)."),
-      polarity (p.apvts, ids::repPolarity, "Invert polarity", "Flip the replacement's polarity."),
-      autoAlign (p.apvts, ids::repAutoAlign, "Auto align", "Line up each sample's transient with the detected hit."),
-      midiOut (p.apvts, ids::midiOut, "MIDI out", "Send detected hits as MIDI notes."),
-      latency (p.apvts, ids::repLatency, "Lookahead", "Accurate: 10 ms lookahead, best timing and velocity. Low latency: 3 ms.")
+void MidiDragSource::paint (juce::Graphics& g)
 {
-    for (auto* b : { &analyzeBtn, &clearBtn, &undoBtn, &redoBtn, &fitBtn, &zoomInBtn, &zoomOutBtn, &exportBtn, &auditionBtn, &advancedBtn })
-        addAndMakeVisible (b);
-    analyzeBtn.setTooltip ("Optional: re-run detection over everything heard so far with the current settings "
-                           "(useful after changing Sensitivity). Hits are detected live while the track plays anyway.");
-    clearBtn.setTooltip ("Forget the heard audio and all triggers.");
-    exportBtn.setTooltip ("Export the trigger list as a Standard MIDI File (host tempo).");
-    auditionBtn.setTooltip ("Play the replacement sample.");
-    advancedBtn.setClickingTogglesState (true);
-
-    analyzeBtn.onClick = [this]
-    {
-        status.setText ("Analyzing...", juce::dontSendNotification);
-        juce::Component::SafePointer<ReplacePage> safe (this);
-        proc.analyseCapture ([safe] (int n)
-        {
-            if (safe == nullptr) return;
-            if (n < 0) safe->status.setText ("Nothing heard yet - press play in your DAW.", juce::dontSendNotification);
-            else
-            {
-                if (auto* src = safe->proc.apvts.getParameter (ids::repSource))
-                    src->setValueNotifyingHost (src->convertTo0to1 ((float) TriggerSource::Edited));
-                safe->wave.repaint();
-                safe->updateStatus();
-            }
-        });
-    };
-    clearBtn.onClick = [this]
-    {
-        proc.clearAll();
-        updateStatus();
-    };
-    undoBtn.onClick = [this] { proc.getUndoManager().undo(); updateStatus(); };
-    redoBtn.onClick = [this] { proc.getUndoManager().redo(); updateStatus(); };
-    fitBtn.onClick = [this] { wave.zoomToFit(); };
-    zoomInBtn.onClick = [this] { wave.zoomBy (1.5, wave.getWidth() * 0.5f); };
-    zoomOutBtn.onClick = [this] { wave.zoomBy (1.0 / 1.5, wave.getWidth() * 0.5f); };
-    exportBtn.onClick = [this] { exportMidi(); };
-    auditionBtn.onClick = [this] { proc.auditionReplacement (0.9f); };
-    advancedBtn.onClick = [this] { showAdvanced = advancedBtn.getToggleState(); resized(); };
-    wave.onEdited = [this] { updateStatus(); };
-
-    status.setColour (juce::Label::textColourId, colours::textDim);
-    status.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (status);
-    addAndMakeVisible (scope);
-    addAndMakeVisible (debleedInput);
-    addAndMakeVisible (wave);
-
-    addAndMakeVisible (mainPanel);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &repOn, &instrument, &sample, &source, &mode, &sensitivity, &velResp, &blend, &output })
-        addAndMakeVisible (c);
-    sampleInfo.setColour (juce::Label::textColourId, colours::textDim);
-    sampleInfo.setFont (juce::FontOptions (12.0f));
-    addAndMakeVisible (sampleInfo);
-
-    addChildComponent (advPanel);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &ghost, &retrig, &dynRange, &gain, &offset, &align, &doubleHits, &focus, &polarity, &autoAlign, &midiOut, &latency })
-        addChildComponent (c);
-
-    mainPanel.toBack();   // panels are backgrounds: keep every control above them
-    advPanel.toBack();
-    liveBadge.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-    liveBadge.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (liveBadge);
-    startTimerHz (8);
-    updateStatus();
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (dragging ? colours::accent.withAlpha (0.35f) : colours::panelRaised);
+    g.fillRoundedRectangle (r, 5.0f);
+    g.setColour (colours::accent);
+    g.drawRoundedRectangle (r, 5.0f, 1.2f);
+    g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+    g.drawText ("Drag MIDI", getLocalBounds(), juce::Justification::centred);
 }
 
-void ReplacePage::paint (juce::Graphics&) {}
+void MidiDragSource::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging || e.getDistanceFromDragStart() < 6) return;
+    if (proc.getTriggers().size() == 0)
+    {
+        if (onMessage) onMessage ("No notes yet - play the track first.");
+        return;
+    }
+    const auto inst = (int) proc.apvts.getRawParameterValue (ids::instrument)->load();
+    auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                    .getChildFile (juce::String ("Thruma ") + getInstrumentName ((Instrument) inst) + ".mid");
+    if (! proc.exportMidi (file)) { if (onMessage) onMessage ("Could not write the MIDI file."); return; }
+    dragging = true;
+    repaint();
+    juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
+                                                               [safe = juce::Component::SafePointer<MidiDragSource> (this)]
+                                                               { if (safe != nullptr) { safe->dragging = false; safe->repaint(); } });
+}
+
+ReplacePage::ReplacePage (ThrumaProcessor& p)
+    : proc (p),
+      instrument (p.apvts, ids::instrument, "Instrument", "The drum on this track."),
+      sample (p.apvts, ids::repSample, "Sample", "Which kit sound plays for the detected hits."),
+      lane (p),
+      sensitivity (p.apvts, ids::repSens, "Sensitivity", "Same as dragging the threshold line: higher catches quieter hits, lower ignores more bleed."),
+      velocity (p.apvts, ids::repVelResp, "Velocity", "0 % = every hit at full level, 100 % = follow the played dynamics."),
+      blend (p.apvts, ids::repBlend, "Blend", "0 % = original drum, 100 % = replacement sample."),
+      output (p.apvts, ids::repOutput, "Output", "Output level."),
+      dragMidi (p)
+{
+    addAndMakeVisible (trackPanel);
+    addAndMakeVisible (controlPanel);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &instrument, &sample, &hits, &info, &lane, &sensitivity, &velocity,
+                                                                        &blend, &output, &dragMidi, &saveBtn, &clearBtn })
+        addAndMakeVisible (c);
+    trackPanel.toBack();
+    controlPanel.toBack();
+
+    hits.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+    info.setFont (juce::FontOptions (12.0f));
+    info.setColour (juce::Label::textColourId, colours::textDim);
+    info.setJustificationType (juce::Justification::topLeft);
+    dragMidi.setTooltip ("Drag into your DAW to drop the detected hits as a MIDI clip (positions from the start of the song).");
+    dragMidi.onMessage = [this] (const juce::String& m) { showMessage (m); };
+    saveBtn.onClick = [this] { saveMidi(); };
+    clearBtn.setTooltip ("Remove all notes and go back to live detection.");
+    clearBtn.onClick = [this] { proc.clearAll(); };
+    startTimerHz (6);
+    timerCallback();
+}
+
+int ReplacePage::currentSlot() const
+{
+    const int sl = (int) proc.apvts.getRawParameterValue (ids::repSample)->load() - 1;
+    return sl >= 0 ? sl : (int) proc.apvts.getRawParameterValue (ids::instrument)->load();
+}
 
 void ReplacePage::resized()
 {
     auto r = getLocalBounds().reduced (12);
-
-    auto bar = r.removeFromTop (30);
-    liveBadge.setBounds (bar.removeFromLeft (104));
-    bar.removeFromLeft (6);
-    analyzeBtn.setBounds (bar.removeFromLeft (90));
-    bar.removeFromLeft (6);
-    clearBtn.setBounds (bar.removeFromLeft (60));
-    bar.removeFromLeft (14);
-    undoBtn.setBounds (bar.removeFromLeft (56));
-    bar.removeFromLeft (4);
-    redoBtn.setBounds (bar.removeFromLeft (56));
-    bar.removeFromLeft (14);
-    zoomOutBtn.setBounds (bar.removeFromLeft (30));
-    bar.removeFromLeft (4);
-    zoomInBtn.setBounds (bar.removeFromLeft (30));
-    bar.removeFromLeft (4);
-    fitBtn.setBounds (bar.removeFromLeft (44));
-    bar.removeFromLeft (14);
-    debleedInput.setBounds (bar.removeFromLeft (150));
-    exportBtn.setBounds (bar.removeFromRight (100));
-    bar.removeFromRight (8);
-    status.setBounds (bar);
-    r.removeFromTop (8);
-
-    auto controls = r.removeFromBottom (196);
+    auto bottom = r.removeFromBottom (112);
     r.removeFromBottom (10);
 
-    if (showAdvanced)
-    {
-        auto adv = r.removeFromBottom (156);
-        r.removeFromBottom (10);
-        advPanel.setBounds (adv);
-        auto c = advPanel.getContentBounds();
-        const int colW = (c.getWidth() - 40) / 3;
-        auto col1 = c.removeFromLeft (colW); c.removeFromLeft (20);
-        auto col2 = c.removeFromLeft (colW); c.removeFromLeft (20);
-        auto col3 = c;
-        layoutRows (col1, { &ghost, &retrig, &dynRange }, 30, 8);
-        layoutRows (col2, { &gain, &offset, &align }, 30, 8);
-        auto t = col3.removeFromLeft (col3.getWidth() / 2);
-        layoutRows (t, { &doubleHits, &focus, &polarity }, 30, 8);
-        layoutRows (col3.removeFromTop (68), { &autoAlign, &midiOut }, 30, 8);
-        latency.setBounds (col3.removeFromTop (46));
-    }
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &advPanel, &ghost, &retrig, &dynRange, &gain, &offset, &align, &doubleHits, &focus, &polarity, &autoAlign, &midiOut, &latency })
-        c->setVisible (showAdvanced);
+    auto left = r.removeFromLeft (190);
+    r.removeFromLeft (10);
+    trackPanel.setBounds (left);
+    auto t = trackPanel.getContentBounds();
+    instrument.setBounds (t.removeFromTop (46));
+    t.removeFromTop (8);
+    sample.setBounds (t.removeFromTop (46));
+    t.removeFromTop (16);
+    hits.setBounds (t.removeFromTop (30));
+    info.setBounds (t);
+    lane.setBounds (r);
 
-    scope.setBounds (r.removeFromTop (juce::jlimit (110, 170, r.getHeight() / 2)));
-    r.removeFromTop (8);
-    wave.setBounds (r);
-
-    mainPanel.setBounds (controls);
-    auto c = mainPanel.getContentBounds();
-    auto left = c.removeFromLeft (juce::jmin (420, c.getWidth() / 2));
+    controlPanel.setBounds (bottom);
+    auto c = controlPanel.getContentBounds();
+    auto buttons = c.removeFromRight (150);
+    c.removeFromRight (20);
+    dragMidi.setBounds (buttons.removeFromTop (34));
+    buttons.removeFromTop (8);
+    auto row = buttons.removeFromTop (30);
+    saveBtn.setBounds (row.removeFromLeft (row.getWidth() / 2 + 10));
+    row.removeFromLeft (6);
+    clearBtn.setBounds (row);
+    const int colW = (c.getWidth() - 24) / 2;
+    auto col1 = c.removeFromLeft (colW);
     c.removeFromLeft (24);
-    {
-        auto row1 = left.removeFromTop (46);
-        const int w = (row1.getWidth() - 12) / 2;
-        instrument.setBounds (row1.removeFromLeft (w));
-        row1.removeFromLeft (12);
-        sample.setBounds (row1);
-        left.removeFromTop (10);
-        auto row2 = left.removeFromTop (46);
-        source.setBounds (row2.removeFromLeft (w));
-        row2.removeFromLeft (12);
-        mode.setBounds (row2);
-        left.removeFromTop (10);
-        auto row3 = left.removeFromTop (28);
-        repOn.setBounds (row3.removeFromLeft (110));
-        sampleInfo.setBounds (row3);
-    }
-    {
-        auto right = c;
-        auto btns = right.removeFromBottom (28);
-        advancedBtn.setBounds (btns.removeFromRight (100));
-        btns.removeFromRight (8);
-        auditionBtn.setBounds (btns.removeFromRight (90));
-        right.removeFromBottom (6);
-        layoutRows (right, { &sensitivity, &velResp, &blend, &output }, 28, 4);
-    }
+    layoutRows (col1, { &sensitivity, &velocity }, 30, 10);
+    layoutRows (c, { &blend, &output }, 30, 10);
 }
 
-void ReplacePage::timerCallback() { updateStatus(); }
-
-void ReplacePage::updateStatus()
+void ReplacePage::timerCallback()
 {
-    undoBtn.setEnabled (proc.getUndoManager().canUndo());
-    redoBtn.setEnabled (proc.getUndoManager().canRedo());
-    analyzeBtn.setEnabled (! proc.isAnalysing());
-    const bool playing = proc.isTransportPlaying();
+    hits.setText (juce::String ((int) proc.getTriggers().size()) + " notes", juce::dontSendNotification);
     const auto src = (TriggerSource) (int) proc.apvts.getRawParameterValue (ids::repSource)->load();
-    liveBadge.setText (playing ? "LISTENING" : "STOPPED", juce::dontSendNotification);
-    liveBadge.setColour (juce::Label::textColourId, playing ? colours::accent : colours::textDim);
+    const auto slot = proc.getKitManager().getSlot (currentSlot());
+    int files = 0;
+    for (auto& l : slot.layers) files += l.files.size();
 
     juce::String s;
-    if (proc.isAnalysing()) s = "Analyzing...";
-    else
-    {
-        const auto& c = proc.getCapture();
-        const double secs = c.length.load() / juce::jmax (1.0, proc.getCurrentSampleRate());
-        s << (int) proc.getTriggers().size() << " triggers";
-        if (wave.getNumSelected() > 0) s << " (" << wave.getNumSelected() << " selected)";
-        s << "   |   " << juce::String (secs, 1) << " s heard";
-        if (src == TriggerSource::Edited) s << "   |   playing your edited hits";
-        else if (src == TriggerSource::Live) s << "   |   live";
-        if (proc.getLearnStatus().isNotEmpty()) s << "   |   " << proc.getLearnStatus();
-    }
-    status.setText (s, juce::dontSendNotification);
-
-    const int slot = [this]
-    {
-        const int sl = (int) proc.apvts.getRawParameterValue (ids::repSample)->load() - 1;
-        return sl >= 0 ? sl : (int) proc.apvts.getRawParameterValue (ids::instrument)->load();
-    }();
-    const auto m = proc.getKitManager().getSlot (slot);
-    int files = 0;
-    for (auto& l : m.layers) files += l.files.size();
-    sampleInfo.setText (files == 0 ? juce::String ("No samples for ") + getInstrumentName ((Instrument) slot) + " - drop WAVs here or use SAMPLES"
-                                   : juce::String (files) + " samples, " + juce::String ((int) m.layers.size()) + " velocity layers",
-                        juce::dontSendNotification);
+    s << (proc.isTransportPlaying() ? "Listening..." : "Stopped") << "\n\n";
+    s << (src == TriggerSource::Edited ? "Playing your edited notes.\nClear to return to live detection."
+                                       : "Live: hits are detected as the track plays.") << "\n\n";
+    if (files == 0) s << "No samples for " << getInstrumentName ((Instrument) currentSlot()) << " yet: drop WAV files here or use SAMPLES. "
+                         "The original drum plays until then.";
+    else s << files << " samples, " << (int) slot.layers.size() << " velocity layers";
+    if (message.isNotEmpty() && juce::Time::getMillisecondCounter() - messageTime < 6000)
+        s = message + "\n\n" + s;
+    info.setText (s, juce::dontSendNotification);
 }
 
-void ReplacePage::exportMidi()
+void ReplacePage::saveMidi()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Export triggers as MIDI",
-                                                   juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Thruma.mid"),
-                                                   "*.mid");
-    juce::Component::SafePointer<ReplacePage> safe (this);
+    if (proc.getTriggers().size() == 0) { showMessage ("No notes yet - play the track first."); return; }
+    const auto inst = (int) proc.apvts.getRawParameterValue (ids::instrument)->load();
+    chooser = std::make_unique<juce::FileChooser> ("Save MIDI",
+        juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (juce::String ("Thruma ") + getInstrumentName ((Instrument) inst) + ".mid"),
+        "*.mid");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
-                          [safe] (const juce::FileChooser& fc)
+                          [safe = juce::Component::SafePointer<ReplacePage> (this)] (const juce::FileChooser& fc)
     {
-        if (safe == nullptr) return;
-        auto f = fc.getResult();
-        if (f == juce::File()) return;
-        if (! f.hasFileExtension ("mid")) f = f.withFileExtension ("mid");
-        safe->status.setText (safe->proc.exportMidi (f) ? "Exported " + f.getFileName() : "Could not write " + f.getFullPathName(),
-                              juce::dontSendNotification);
+        if (safe == nullptr || fc.getResult() == juce::File()) return;
+        auto f = fc.getResult().withFileExtension ("mid");
+        const bool ok = safe->proc.exportMidi (f);
+        safe->showMessage (ok ? "Saved " + juce::String ((int) safe->proc.getTriggers().size()) + " notes to " + f.getFileName()
+                              : "Could not write " + f.getFullPathName());
     });
 }
 
 bool ReplacePage::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    for (auto& f : files)
-        if (KitManager::isAudioFile (juce::File (f))) return true;
+    for (auto& f : files) if (KitManager::isAudioFile (juce::File (f))) return true;
     return false;
 }
 
 void ReplacePage::filesDropped (const juce::StringArray& files, int, int)
 {
-    const int slot = [this]
-    {
-        const int sl = (int) proc.apvts.getRawParameterValue (ids::repSample)->load() - 1;
-        return sl >= 0 ? sl : (int) proc.apvts.getRawParameterValue (ids::instrument)->load();
-    }();
     juce::Array<juce::File> all;
-    for (auto& l : proc.getKitManager().getSlot (slot).layers) all.addArray (l.files);
-    for (auto& f : files)
-        if (KitManager::isAudioFile (juce::File (f))) all.addIfNotAlreadyThere (juce::File (f));
-    proc.getKitManager().assignFiles (slot, all);
+    for (auto& l : proc.getKitManager().getSlot (currentSlot()).layers) all.addArray (l.files);
+    for (auto& f : files) if (KitManager::isAudioFile (juce::File (f))) all.addIfNotAlreadyThere (juce::File (f));
+    proc.getKitManager().assignFiles (currentSlot(), all);
     proc.rebuildKit();
-    updateStatus();
 }
 
 } // namespace thruma::ui

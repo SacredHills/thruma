@@ -9,7 +9,7 @@ ThrumaEditor::ThrumaEditor (ThrumaProcessor& p)
     setLookAndFeel (&lnf);
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
 
-    const char* names[] = { "REPLACE", "DEBLEED", "SAMPLES" };
+    const char* names[] = { "DEBLEED", "REPLACE", "SAMPLES" };
     for (int i = 0; i < 3; ++i)
     {
         auto& t = tabs[(size_t) i];
@@ -51,8 +51,8 @@ void ThrumaEditor::showTab (int index)
     proc.setUiTab (index);
     for (int i = 0; i < 3; ++i)
         tabs[(size_t) i].setToggleState (i == index, juce::dontSendNotification);
-    replacePage.setVisible (index == 0);
-    debleedPage.setVisible (index == 1);
+    debleedPage.setVisible (index == 0);
+    replacePage.setVisible (index == 1);
     samplesPage.setVisible (index == 2);
     if (index == 2) samplesPage.refreshDetail();
 }
@@ -90,7 +90,7 @@ void ThrumaEditor::resized()
     right.removeFromRight (10);
     latencyLabel.setBounds (right.removeFromRight (150));
 
-    for (juce::Component* p : std::initializer_list<juce::Component*> { &replacePage, &debleedPage, &samplesPage })
+    for (juce::Component* p : std::initializer_list<juce::Component*> { &debleedPage, &replacePage, &samplesPage })
         p->setBounds (r);
 }
 

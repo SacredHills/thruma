@@ -61,6 +61,7 @@ public:
     const ReplaceSettings& getSettings() const noexcept { return settings; }
 
     int getLatency() const noexcept { return lookahead; }
+    int64_t getInputPosition() const noexcept { return inPos; }   // engine samples consumed so far
     const TransientDetector& getDetector() const noexcept { return detector; }
     TransientDetector& getDetector() noexcept { return detector; }
     SampleEngine& getSampleEngine() noexcept { return samples; }

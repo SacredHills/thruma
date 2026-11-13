@@ -93,28 +93,36 @@ public:
         (live re-detection keeps them) and switches playback to the edited list. */
     void commitTriggerEdit (std::vector<Trigger> newList, const juce::String& actionName, bool userEdit = true);
     juce::String getLearnStatus() const { return learnStatus; }
-    void analyseCapture (std::function<void (int numHits)> onDone);
     bool isAnalysing() const { return analysing.load(); }
     bool exportMidi (const juce::File& file) const;
     double getLastBpm() const { return lastBpm.load(); }
     int64_t getPlayheadPosition() const { return playhead.load(); }
     bool isTransportPlaying() const { return transportPlaying.load(); }
 
-    void auditionCapture (int64_t timelinePos, double seconds = 0.35);
-    void auditionReplacement (float velocity);
     void previewSample (const juce::File& file);
 
+    /** Detection level / threshold history on the host timeline (one value per kEnvBin samples). */
+    static constexpr int kEnvBin = DetectionScope::kDecim;
+    const std::vector<float>& getEnvelopeLevel() const { return envLevel; }
+    const std::vector<float>& getEnvelopeThreshold() const { return envThreshold; }
+    float getCurrentThresholdDb() const;
+    /** Host-timeline position = scope (engine) position + this offset. */
+    int64_t getScopeToTimelineOffset() const { return scopeOffset.load (std::memory_order_relaxed); }
+    float getCurrentReferenceDb() const { return replace.getScope().referenceDb.load(); }
+
+    void updateTrackProperties (const TrackProperties& properties) override;
+    juce::String getTrackName() const { return trackName; }
+
     // debleed
-    void analyseDebleed (std::function<void (const juce::String& report)> onDone);
-    juce::String getDebleedReport() const { return debleedReport; }
     float getDebleedMeterDb (int band) const { return debleed.getMeterDb (band); }
     bool isDebleedActive() const { return configuredDebleed; }
     float getDebleedMeterHz (int band) const { return debleed.getMeterBandHz (band); }
     bool hasDebleedModel() const { return debleedModelPublisher.getLatest() != nullptr; }
 
-    // linked instances
+    // linked instances (every instance shares its track under the DAW track name)
     void setPublishName (const juce::String& name);
     juce::String getPublishName() const { return publishName; }
+    juce::StringArray getOtherTrackNames() const;
     void setLinkedSourceName (const juce::String& name);
     juce::String getLinkedSourceName() const { return linkedSourceName; }
     bool isLinkSynced() const { return linkSynced.load(); }
@@ -175,10 +183,10 @@ private:
     std::array<PendingNote, 512> pendingNotes {};
     int numPending = 0;
     int64_t internalTimeline = 0;
-    std::atomic<int> auditionRequestIdx { -1 }, auditionInstrument { -1 };
-    std::atomic<float> auditionVelocity { 1.0f };
-    int64_t auditionPos = -1;
-    int auditionLeft = 0, auditionLen = 0;
+    std::vector<float> envLevel, envThreshold;
+    int64_t lastScopePoint = 0;
+    std::atomic<int64_t> scopeOffset { 0 };
+    juce::String trackName;
     Instrument lastInstrument = Instrument::Count;
     ReplaceSettings lastReplaceSettings;
     DebleedSettings lastDebleedSettings;
@@ -208,14 +216,13 @@ private:
     TriggerList triggers;
     juce::UndoManager undoManager { 30000, 100 };
     std::atomic<bool> analysing { false };
-    juce::String debleedReport;
     juce::String publishName, linkedSourceName;
     std::atomic<int> publishId { -1 }, linkedId { -1 };
     std::atomic<bool> linkSynced { false };
     std::atomic<double> lastBpm { 120.0 };
     std::atomic<int64_t> playhead { 0 };
     std::atomic<bool> transportPlaying { false };
-    int uiTab = 0;
+    int uiTab = 1;   // REPLACE
     std::unique_ptr<juce::ThreadPool> workers;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (ThrumaProcessor)

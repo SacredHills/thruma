@@ -25,5 +25,14 @@ int main()
     std::printf ("events=%lld\n", (long long) sc.eventsWritten.load());
     for (int64_t e = 0; e < sc.eventsWritten.load() && e < 60; ++e)
         std::printf ("ev %lld v=%.2f\n", (long long) sc.eventPos[(size_t) e].load(), sc.eventVel[(size_t) e].load());
+    juce::File f ("/tmp/thruma_test.mid");
+    std::printf ("export ok=%d size=%lld\n", proc->exportMidi (f) ? 1 : 0, (long long) f.getSize());
+    juce::FileInputStream in (f);
+    juce::MidiFile mf;
+    std::printf ("read ok=%d tracks=%d\n", mf.readFrom (in) ? 1 : 0, mf.getNumTracks());
+    int notes = 0;
+    for (int t = 0; t < mf.getNumTracks(); ++t)
+        for (auto* e : *mf.getTrack (t)) if (e->message.isNoteOn()) ++notes;
+    std::printf ("note-ons in file: %d\n", notes);
     delete proc;
 }

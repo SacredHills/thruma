@@ -36,19 +36,25 @@ int main (int argc, char** argv)
         {
             ph.pos = p;
             for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, s.mics[sig::Snare].data() + p, 256);
+            midi.clear();
             proc->processBlock (buf, midi);
-            std::this_thread::sleep_for (std::chrono::microseconds (500));
+            std::this_thread::sleep_for (std::chrono::microseconds (900));
+            if (p == (s.length * 7 / 10) / 256 * 256)
+            {
+                juce::Thread::sleep (300);
+                juce::MessageManager::callAsync ([&]
+                {
+                    auto img = ed->createComponentSnapshot (ed->getLocalBounds());
+                    juce::File f = out.getChildFile ("replace_live.png");
+                    f.deleteFile();
+                    juce::FileOutputStream os (f);
+                    juce::PNGImageFormat().writeImageToStream (img, os);
+                });
+                juce::Thread::sleep (300);
+            }
         }
-        juce::Thread::sleep (800);
-        juce::MessageManager::callAsync ([&]
-        {
-            auto img = ed->createComponentSnapshot (ed->getLocalBounds());
-            juce::File f = out.getChildFile ("replace_live.png");
-            f.deleteFile();
-            juce::FileOutputStream os (f);
-            juce::PNGImageFormat().writeImageToStream (img, os);
-            juce::MessageManager::getInstance()->stopDispatchLoop();
-        });
+        juce::Thread::sleep (300);
+        juce::MessageManager::callAsync ([&] { juce::MessageManager::getInstance()->stopDispatchLoop(); });
     });
     juce::MessageManager::getInstance()->runDispatchLoop();
     audio.join();

@@ -6,7 +6,7 @@
 namespace thruma::ui
 {
 
-/** Live per-band gain-reduction display (visual feedback instead of more knobs). */
+/** Live per-band gain-reduction display. */
 class ReductionDisplay : public juce::Component
 {
 public:
@@ -27,27 +27,20 @@ public:
 
 private:
     void timerCallback() override;
-    void refreshLinkSources();
+    void refreshReferences();
+    void referenceChosen();
 
     ThrumaProcessor& proc;
     ParamToggle dbOn;
-    juce::TextButton analyzeBtn { "Learn now" }, advancedBtn { "Advanced" };
-    juce::Label report, linkStatus, shareLabel;
+    juce::Label status;
     ReductionDisplay display;
-
-    Panel mainPanel { "Debleed" };
-    ParamCombo instrument, reference;
-    juce::Label linkedLabel;
-    juce::ComboBox linkedSource;
-    juce::TextEditor shareName;
+    Panel panel { "Debleed" };
+    ParamCombo instrument;
+    juce::Label refLabel;
+    juce::ComboBox reference;
     ParamSlider amount, sensitivity, attack, release;
-
-    Panel advPanel { "Advanced" };
-    ParamSlider maxRed, smooth, lowProtect, decay;
-    ParamToggle adaptive;
-    bool showAdvanced = false;
+    juce::StringArray lastItems;
     int tick = 0;
-    juce::StringArray lastSources;
 };
 
 } // namespace thruma::ui

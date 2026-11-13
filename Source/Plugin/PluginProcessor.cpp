@@ -150,6 +150,11 @@ void ThrumaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
             debleedModelPublisher.publish (std::make_unique<DebleedModel> (m->remapped (sampleRate, debleed.getFftSize())));
 
     allocateCapture();   // always listening: the track's audio is recorded while the host plays
+    if (publishName.isEmpty())
+    {
+        static std::atomic<int> instanceCounter { 0 };
+        setPublishName (trackName.isNotEmpty() ? trackName : "Thruma " + juce::String (++instanceCounter));
+    }
     prepared = true;
 }
 
@@ -602,30 +607,31 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
         }
     }
 
-    // --- auditioning / previews (always audible at unity) ---
-    if (const int req = auditionRequestIdx.exchange (-1); req >= 0)
+    // --- detection-level history for the track lane (engine timeline = host timeline of the detector input) ---
     {
-        auditionPos = req;
-        auditionLen = auditionLeft = (int) std::min<int64_t> ((int64_t) (0.35 * currentRate), capture.length.load() - req);
-    }
-    if (auditionLeft > 0 && auditionPos >= 0 && ! playing)
-    {
-        const int fade = juce::jmin (64, auditionLen / 4);
-        const int m = juce::jmin (n, auditionLeft);
-        for (int i = 0; i < m; ++i)
+        const auto& sc = replace.getScope();
+        const auto written = sc.pointsWritten.load (std::memory_order_relaxed);
+        const auto origin = capture.origin.load (std::memory_order_relaxed);
+        if (engineTimeline >= 0 && origin >= 0 && ! envLevel.empty())
         {
-            const int done = auditionLen - auditionLeft;
-            float g = 1.0f;
-            if (done < fade) g = (float) done / (float) fade;
-            if (auditionLeft < fade) g = std::min (g, (float) auditionLeft / (float) fade);
-            const float v = capture.data[0][(size_t) auditionPos] * g;
-            for (int c = 0; c < nch; ++c) ch[c][i] += v;
-            ++auditionPos;
-            --auditionLeft;
+            const int64_t engEnd = replace.getInputPosition();
+            scopeOffset.store (engineTimeline + n - engEnd, std::memory_order_relaxed);
+            for (int64_t i = std::max (lastScopePoint, written - DetectionScope::kPoints + 1); i < written; ++i)
+            {
+                const auto k = (size_t) (i % DetectionScope::kPoints);
+                const int64_t tl = engineTimeline + n - (engEnd - i * DetectionScope::kDecim);
+                const int64_t idx = (tl - origin) / kEnvBin;
+                if (idx >= 0 && idx < (int64_t) envLevel.size())
+                {
+                    envLevel[(size_t) idx] = sc.level[k].load (std::memory_order_relaxed);
+                    envThreshold[(size_t) idx] = sc.threshold[k].load (std::memory_order_relaxed);
+                }
+            }
         }
+        lastScopePoint = written;
     }
-    if (const int inst = auditionInstrument.exchange (-1); inst >= 0 && kit != nullptr)
-        previewEngine.trigger (*kit, kitSeq, (Instrument) inst, auditionVelocity.load(), 0, rs.playback);
+
+    // --- sample preview (Samples page) ---
     if (const auto* p = previewPublisher.acquire(); p != nullptr && p->seq != playedPreviewSeq)
     {
         playedPreviewSeq = p->seq;
@@ -721,6 +727,8 @@ void ThrumaProcessor::allocateCapture()
     }
     capture.origin.store (-1);
     capture.length.store (0);
+    envLevel.assign ((size_t) (cap / kEnvBin + 1), -180.0f);
+    envThreshold.assign ((size_t) (cap / kEnvBin + 1), -180.0f);
     lastLearnLength = 0;
 }
 
@@ -730,6 +738,8 @@ void ThrumaProcessor::clearCapture()
     capture.origin.store (-1);
     capture.length.store (0);
     for (auto& d : capture.data) std::fill (d.begin(), d.end(), 0.0f);
+    std::fill (envLevel.begin(), envLevel.end(), -180.0f);
+    std::fill (envThreshold.begin(), envThreshold.end(), -180.0f);
     suspendProcessing (false);
     storedOverview.clear();
     lastLearnLength = 0;
@@ -739,6 +749,38 @@ void ThrumaProcessor::clearAll()
 {
     commitTriggerEdit ({}, "Clear", false);
     clearCapture();
+    if (auto* src = apvts.getParameter (ids::repSource))
+        src->setValueNotifyingHost (src->convertTo0to1 ((float) TriggerSource::Live));
+}
+
+float ThrumaProcessor::getCurrentThresholdDb() const
+{
+    const auto& sc = replace.getScope();
+    const auto w = sc.pointsWritten.load (std::memory_order_acquire);
+    return w > 0 ? sc.threshold[(size_t) ((w - 1) % DetectionScope::kPoints)].load (std::memory_order_relaxed) : -40.0f;
+}
+
+void ThrumaProcessor::updateTrackProperties (const TrackProperties& properties)
+{
+    // share this track with other Thruma instances under its DAW track name
+    juce::WeakReference<ThrumaProcessor> weak (this);
+    const juce::String name = properties.name.has_value() ? *properties.name : juce::String();
+    juce::MessageManager::callAsync ([weak, name]
+    {
+        if (auto* self = weak.get(); self != nullptr && name.isNotEmpty() && name != self->trackName)
+        {
+            self->trackName = name;
+            self->setPublishName (name);
+        }
+    });
+}
+
+juce::StringArray ThrumaProcessor::getOtherTrackNames() const
+{
+    juce::StringArray names;
+    for (auto& src : LinkHub::getInstance().listSources())
+        if (src.id != publishId.load()) names.add (src.name);
+    return names;
 }
 
 void ThrumaProcessor::buildStoredOverview()
@@ -759,41 +801,6 @@ void ThrumaProcessor::buildStoredOverview()
     storedOverviewOrigin = capture.origin.load();
 }
 
-void ThrumaProcessor::analyseCapture (std::function<void (int)> onDone)
-{
-    const auto len = capture.length.load();
-    if (len <= 0 || analysing.exchange (true)) { if (onDone) onDone (-1); return; }
-
-    auto audio = std::make_shared<std::vector<float>> (capture.data[0].begin(), capture.data[0].begin() + len);
-    const auto origin = capture.origin.load();
-    ReplaceSettings rs; DebleedSettings ds; ReferenceSource ref; bool mo;
-    readParameters (rs, ds, ref, mo);
-    const auto settings = rs.detector;
-    const double sr = currentRate;
-    juce::WeakReference<ThrumaProcessor> weak (this);
-
-    workers->addJob ([weak, audio, origin, settings, sr, onDone]
-    {
-        float refDb = -150.0f;
-        SpectralTemplate tmpl;
-        auto found = analyseTake (audio->data(), (int64_t) audio->size(), sr, settings, &refDb, &tmpl);
-        for (auto& t : found) t.position += origin;
-
-        juce::MessageManager::callAsync ([weak, found = std::move (found), refDb, tmpl, onDone]() mutable
-        {
-            auto* self = weak.get();
-            if (self == nullptr) return;
-            self->commitTriggerEdit (found, "Re-detect", false);
-            auto lm = std::make_unique<LiveDetectionModel>();
-            lm->refDb = refDb;
-            lm->tmpl = tmpl;
-            self->liveModelPublisher.publish (std::move (lm));
-            self->analysing.store (false);
-            if (onDone) onDone ((int) found.size());
-        });
-    });
-}
-
 bool ThrumaProcessor::exportMidi (const juce::File& file) const
 {
     const int slot = [this]
@@ -812,97 +819,12 @@ bool ThrumaProcessor::exportMidi (const juce::File& file) const
     return file.replaceWithData (bytes.data(), bytes.size());
 }
 
-void ThrumaProcessor::auditionCapture (int64_t timelinePos, double)
-{
-    const auto origin = capture.origin.load();
-    const auto idx = timelinePos - origin;
-    if (origin < 0 || idx < 0 || idx >= capture.length.load()) return;
-    auditionRequestIdx.store ((int) idx);
-}
-
-void ThrumaProcessor::auditionReplacement (float velocity)
-{
-    const int s = (int) apvts.getRawParameterValue (ids::repSample)->load() - 1;
-    auditionVelocity.store (velocity);
-    auditionInstrument.store (s >= 0 ? s : (int) apvts.getRawParameterValue (ids::instrument)->load());
-}
-
 void ThrumaProcessor::previewSample (const juce::File& file)
 {
     auto item = std::make_unique<PreviewItem>();
     item->sample = kitManager.playbackSample (file, currentRate);
     item->gain = 0.8f;
     if (item->sample != nullptr) previewPublisher.publish (std::move (item));
-}
-
-//==============================================================================
-void ThrumaProcessor::analyseDebleed (std::function<void (const juce::String&)> onDone)
-{
-    const auto len = capture.length.load();
-    if (len <= 0 || analysing.exchange (true)) { if (onDone) onDone ("Capture some playback first (arm Capture on the Replace page)."); return; }
-
-    auto target = std::make_shared<std::vector<float>> (capture.data[0].begin(), capture.data[0].begin() + len);
-    auto refs = std::make_shared<std::vector<std::vector<float>>>();
-    juce::StringArray names;
-    if (capture.hasRef)
-    {
-        const bool linked = configuredLinked && ! isSidechainConnected();
-        refs->emplace_back (capture.data[1].begin(), capture.data[1].begin() + len);
-        names.add (linked ? "Linked instance" : "Sidechain L");
-        if (! linked && sidechainChannels.load() > 1)
-        {
-            refs->emplace_back (capture.data[2].begin(), capture.data[2].begin() + len);
-            names.add ("Sidechain R");
-            std::vector<float> sum ((size_t) len);
-            for (size_t i = 0; i < (size_t) len; ++i) sum[i] = 0.5f * ((*refs)[0][i] + (*refs)[1][i]);
-            refs->push_back (std::move (sum));
-            names.add ("Sidechain L+R");
-        }
-    }
-    const auto inst = (Instrument) (int) apvts.getRawParameterValue (ids::instrument)->load();
-    const float sens = apvts.getRawParameterValue (ids::dbSens)->load() * 0.01f;
-    const double sr = currentRate;
-    juce::WeakReference<ThrumaProcessor> weak (this);
-
-    workers->addJob ([weak, target, refs, names, inst, sens, sr, onDone]
-    {
-        std::vector<const float*> cands;
-        for (auto& r : *refs) cands.push_back (r.data());
-        auto result = thruma::analyseDebleed (target->data(), (int) target->size(), cands, sr, inst, sens);
-
-        juce::MessageManager::callAsync ([weak, result, names, onDone]
-        {
-            auto* self = weak.get();
-            if (self == nullptr) return;
-            self->analysing.store (false);
-
-            juce::String report;
-            report << "Analyzed " << result.numHits << " " << getInstrumentName ((Instrument) (int) self->apvts.getRawParameterValue (ids::instrument)->load())
-                   << " hits. Bleed level " << juce::String (result.bleedLevelDb, 1) << " dB.";
-            int refChoice = 0;
-            if (result.bestReference >= 0)
-            {
-                const auto& nm = names[result.bestReference];
-                report << " Best reference: " << nm << " (coherence " << juce::String (result.referenceScores[(size_t) result.bestReference], 2) << ").";
-                refChoice = nm == "Sidechain L" ? 1 : nm == "Sidechain R" ? 2 : nm == "Sidechain L+R" ? 3 : 4;
-            }
-            else if (! names.isEmpty())
-            {
-                report << " No reference carries enough of the bleed - using blind mode.";
-            }
-
-            self->debleedModelPublisher.publish (std::make_unique<DebleedModel> (result.model));
-            auto setParam = [self] (const char* id, float plainValue)
-            {
-                if (auto* p = self->apvts.getParameter (id))
-                    p->setValueNotifyingHost (p->convertTo0to1 (plainValue));
-            };
-            setParam (ids::dbAmount, result.suggestedAmount * 100.0f);
-            if (! names.isEmpty()) setParam (ids::dbReference, (float) refChoice);
-            self->debleedReport = report;
-            if (onDone) onDone (report);
-        });
-    });
 }
 
 //==============================================================================
@@ -953,7 +875,6 @@ void ThrumaProcessor::getStateInformation (juce::MemoryBlock& destData)
         dm.setProperty ("transfer", floatsToBase64 (m->transfer), nullptr);
         dm.setProperty ("floor", floatsToBase64 (m->bleedFloor), nullptr);
         dm.setProperty ("tau", floatsToBase64 (m->decayTau), nullptr);
-        dm.setProperty ("report", debleedReport, nullptr);
         root.appendChild (dm, nullptr);
     }
 
@@ -1021,7 +942,6 @@ void ThrumaProcessor::setStateInformation (const void* data, int sizeInBytes)
         m->transfer = base64ToFloats (dm.getProperty ("transfer").toString());
         m->bleedFloor = base64ToFloats (dm.getProperty ("floor").toString());
         m->decayTau = base64ToFloats (dm.getProperty ("tau").toString());
-        debleedReport = dm.getProperty ("report").toString();
         if ((int) m->decayTau.size() == m->getNumBins())
         {
             if (! m->matches (currentRate, debleedFftSizeFor (currentRate)))

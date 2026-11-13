@@ -1,142 +1,103 @@
 # Thruma User Guide
 
-Thruma has three pages: **REPLACE**, **DEBLEED** and **SAMPLES**. The header shows the plug-in's total latency, which your DAW compensates automatically, a hit LED that flashes on every triggered hit, and input/output meters.
+Thruma has three pages: **DEBLEED**, **REPLACE** and **SAMPLES**. Everything works in real time on the track Thruma is inserted on: press play in your DAW and it listens. There is nothing to record or analyse first.
 
-Most controls have tooltips: hover over them for a short explanation. Double-click a slider to reset it.
-
----
-
-## 1. Typical workflows
-
-### Replacement (everything is real time)
-1. Insert Thruma on the drum track and choose its **Instrument** (Kick, Snare, Tom 1–4, Hi-Hat, Crash, Ride, China, Splash).
-2. Give that instrument some samples: drop WAV files onto the REPLACE page, or use the SAMPLES page.
-3. Press play in your DAW. There is nothing to record or analyse first: Thruma listens to the track it is on.
-   - The **live trigger view** shows the drum's level (teal), the **threshold** (amber line), the measured bleed floor (grey line), every triggered hit (amber marks) and every candidate it rejected as bleed (grey ×).
-   - Too many false triggers? **Drag the amber threshold line up** (or lower Sensitivity) until the bleed stays under it. Missing quiet hits? Drag it down, or raise **Ghost Notes** in Advanced.
-   - Turn on **Debleed input** in the toolbar to run Debleed before detection, which lowers the bleed the detector sees.
-4. Choose **Mode**:
-   - **Replace** crossfades the original and the sample with **Blend**.
-   - **Layer** keeps the original and adds the sample at the **Blend** level.
-
-If the selected instrument has no samples, the original passes through untouched, so the track never goes silent.
-
-While the track plays, Thruma also learns in the background, with no button to press. It learns the level of your real hits and the drum's spectral fingerprint, which makes detection more consistent after the first few seconds. If Debleed is on, it also learns the drum's decay and the bleed.
-
-### Fixing individual hits
-Every detected hit appears in the waveform editor below the live view while the song plays. Re-playing a section re-detects it, without duplicates. Edit anything there (see below). As soon as you edit, **Triggers** switches to *Edited triggers*, so your corrections are what plays back. Hits you added or changed are kept even if you switch back to *Live detection*. **Re-detect** re-runs detection over everything heard so far with the current settings. **Export MIDI** saves the performance as a `.mid` file.
-
-### Debleed
-1. Turn on **Debleed** (on the DEBLEED page). This adds about 21 ms of compensated latency.
-2. Choose a **Reference** if you have one (see section 3). Otherwise, *None (blind)* works from the drum's own hits.
-3. Play the track. Debleed adapts automatically: it learns the drum's decay per frequency, its fingerprint, the bleed spectrum and how the reference leaks into this mic. **Learn now** additionally picks the best reference input and sets a suitable Amount from everything heard so far.
-4. Fine-tune with **Amount** and **Release**, and watch the gain-reduction display.
-
-Debleed runs **before** replacement, so live detection also benefits from the cleaner signal.
+The header shows the plugin's latency (your DAW compensates it automatically), a hit light, and input/output meters. Hover any control for a short explanation; double-click a slider to reset it.
 
 ---
 
-## 2. REPLACE page
+## REPLACE
 
-### Waveform editor
+The Replace page works like a tracker. It has a track lane and a few controls.
+
+### The track lane
+- **AUDIO lane:** the drum's level as the song plays (teal).
+  - The dashed amber line is the **threshold**. **Drag it up or down.** Hits that rise above it become notes; bleed that stays under it is ignored.
+  - Grey **×** marks show moments that crossed the threshold but were ignored because they didn't sound like this drum (bleed from the kick, hats, cymbals and so on).
+- **MIDI lane:** every detected hit, as a note with its velocity.
+
+Editing in the MIDI lane:
+
 | Action | How |
 |---|---|
-| Add a trigger | Double-click on empty waveform. Velocity is estimated from the audio |
-| Select | Click a trigger; Shift-click to add to the selection; drag on empty space to box-select; Ctrl/Cmd+A selects all |
-| Move | Drag a selected trigger left or right; ←/→ nudge by one sample (Shift: 1 ms) |
-| Velocity | Ctrl/Cmd-drag up or down on a trigger. The square marker's height shows velocity |
-| Delete | Delete/Backspace, or right-click → Delete |
-| Audition | Click a trigger to hear the original hit; Alt-click or double-click to hear the replacement |
-| Zoom / scroll | Mouse wheel zooms at the cursor; Shift+wheel or the scrollbar scrolls; **+ / − / Fit** buttons; **F** fits |
-| Undo / Redo | **Undo/Redo** buttons, or Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z |
+| Move notes | Drag a note sideways |
+| Change velocity | Drag the dot on top of a note up or down |
+| Add a note | Double-click an empty spot (height = velocity) |
+| Select | Click; Shift-click to add; drag on empty space to box-select; Ctrl/Cmd+A selects all |
+| Delete | Delete / Backspace |
+| Undo / Redo | Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z |
+| Zoom / scroll | Mouse wheel zooms; Shift+wheel or the scrollbar scrolls; **F** shows the whole song |
 
-Ghost notes (more than 14 dB below the loudest hits) are drawn dimmer.
+The lane follows the playhead while the song plays.
 
-### Main controls
+**Live vs edited:** while you haven't edited anything, hits are detected live every time the song plays, and replaying a section re-detects it without duplicates. As soon as you edit a note, your edited notes are what plays back. **Clear** removes all notes and returns to live detection.
+
+### Track panel
 | Control | What it does |
 |---|---|
-| **Instrument** | The drum on this track. Selects a detection profile: frequency bands, timing windows, decay and default MIDI note. Shared with DEBLEED |
-| **Sample** | Which kit slot plays for detected hits. *Same as instrument* by default; set it to another slot to, for example, trigger a kick sample from a snare track |
-| **Triggers** | *Live detection*, *Edited triggers* (the list in the editor, following the host timeline) or *MIDI only* |
-| **Mode** | *Replace* or *Layer* (see above) |
-| **Replace** switch | Turns triggering off. MIDI-triggered samples still play |
-| **Sensitivity** | Higher catches quieter hits; lower rejects more bleed. The same control as dragging the threshold line in the live view. At 0 % the threshold sits just below your loudest hits |
-| **Velocity Response** | 0 % plays every hit at full level; 100 % follows the played dynamics across the *Dynamic Range* |
-| **Blend** | Replace: original ↔ sample balance. Layer: sample level |
+| **Instrument** | The drum on this track (Kick, Snare, Tom 1–4, Hi-Hat, Crash, Ride, China, Splash). Selects tuned detection settings. Shared with DEBLEED |
+| **Sample** | Which kit sound plays for the hits. *Same as instrument* by default |
+
+The panel also shows the note count, whether Thruma is listening, and how many samples are loaded. If the instrument has no samples yet, the original drum plays unchanged. Drop WAV files onto the page to add samples quickly.
+
+### Controls
+| Control | What it does |
+|---|---|
+| **Sensitivity** | The same as dragging the threshold. Higher catches quieter hits; lower ignores more bleed. At 0 % only hits close to your loudest ones count |
+| **Velocity** | 0 % = every hit at full level, 100 % = follow the played dynamics |
+| **Blend** | 0 % = original drum, 100 % = replacement sample |
 | **Output** | Output level |
-| **Audition** | Plays the replacement sample |
+| **Drag MIDI** | Drag this into your DAW to drop the notes as a MIDI clip. Note positions are measured from the start of the song, so drop the clip at bar 1 to line it up |
+| **Save MIDI…** | Saves the notes as a `.mid` file |
+| **Clear** | Removes all notes and returns to live detection |
 
-### Advanced
-| Control | What it does |
-|---|---|
-| **Ghost Notes** | Extends detection downward for quiet hits. Most effective on snare and hi-hat |
-| **Retrigger** | Minimum time between hits. *0 ms* uses the instrument's default (kick 28 ms, snare 30 ms, …) |
-| **Dynamic Range** | The level range (dB) that maps to velocity 1–127, and the range Velocity Response works over |
-| **Sample Gain** | Gain of the replacement samples |
-| **Sample Start** | Skips into the sample to trim its attack, with a 1 ms de-click fade |
-| **Align** | Shifts the replacement against the original by −5…+20 ms, for phase alignment with the other mics |
-| **Double hits** | Detects flams, drags and fast double strokes while the previous hit is still ringing |
-| **Frequency focus** | Rejects hits whose spectrum does not match the instrument (bleed rejection) |
-| **Invert polarity** | Flips the replacement's polarity |
-| **Auto align** | Lines up each sample's own transient with the detected hit |
-| **MIDI out** | Sends hits as MIDI notes on channel 10, using the kit slot's MIDI note |
-| **Lookahead** | *Accurate (10 ms)* gives the best timing and velocity. *Low latency (3 ms)* is for tracking; it uses a shorter velocity window |
+Thruma also learns in the background while the song plays: the level of your real hits and the drum's sound. Detection gets more consistent after the first few seconds.
+
+**Too many false triggers?**
+1. Drag the threshold above the bleed.
+2. Turn on DEBLEED: it cleans the drum before detection.
+3. Delete any remaining false notes in the MIDI lane.
+
+**Missing quiet hits?** Drag the threshold down.
 
 ---
 
-## 3. DEBLEED page
+## DEBLEED
 
-The debleed is **not a gate**. For every frequency band it estimates how much of the signal is the target drum and how much is bleed, then applies smooth, phase-neutral attenuation:
-
-- At each detected hit, the drum's spectrum is captured. It then decays at the drum's own rate, which is learned by Analyze. Everything this model explains is **kept**, so the natural sustain and tail survive. Bleed arriving during the decay, such as a crash over a snare's ring, is reduced.
-- Just before and during each hit, an **attack window** stays fully open. The detector runs ahead of the audio, so this happens before the transient arrives.
-- Bleed is attenuated down to a floor set by **Amount** and **Max Reduction**. It never drops to silence, so there is no pumping and no chopped cymbal tails.
+Debleed runs **before** detection and replacement, so it also reduces what triggers the replacement. It is **not a gate**:
+- It keeps the drum's attack, its natural ring-out and its ghost notes.
+- It reduces bleed per frequency band, smoothly, without pumping or chopping cymbal tails.
+- It learns automatically while the track plays.
 
 | Control | What it does |
 |---|---|
-| **Debleed** | On/off (non-automatable, because it changes latency). Also available as **Debleed input** on the REPLACE page: debleed always runs before trigger detection |
+| **Debleed** | On/off. Adds about 21 ms of latency, compensated by your DAW |
 | **Instrument** | Shared with REPLACE |
-| **Reference** | *None (blind)*, *Sidechain L / R / L+R*, or *Linked instance* |
-| **Share this track as** | Publishes this track's input under a name, so other Thruma instances can use it as a reference |
-| **Linked source** | The shared track to use when Reference = *Linked instance* |
+| **Reference** | Optional: another mic that carries the bleed. Choose the **sidechain input** (L, R or L+R), or any other track that has Thruma on it. Those are listed by their DAW track names, so there is nothing to set up |
 | **Amount** | How strongly bleed is reduced |
-| **Sensitivity** | How readily quiet hits (ghost notes) of the target drum are recognised and protected |
-| **Attack Preservation** | Length and strength of the untouched window at each hit (5–65 ms) |
-| **Release** | How smoothly reduction returns after the drum. Longer is smoother |
+| **Sensitivity** | How readily quiet hits (ghost notes) of the drum are recognised and kept |
+| **Attack Preservation** | Keeps the start of every hit untouched |
+| **Release** | How smoothly the reduction lets go after each hit |
 
-**Advanced**: *Max Reduction* (the deepest cut at 100 % Amount), *Smoothing* (frequency smoothing from 1/24 to 1/3 octave), *Low Protect* (never cut below this frequency, useful to keep a kick's sub), *Decay Scale* (scales the preserved decay), *Adaptive learning* (keeps refining the bleed estimate while playing).
+The display shows the current reduction per frequency band.
 
-### Choosing a reference
-- **Sidechain**: route the mic that causes the bleed (overheads for cymbals, the kick mic for kick bleed) to Thruma's sidechain input in your DAW.
-- **Linked instances**: insert Thruma on the source track and type a name under *Share this track as*, for example "Kick In". On the target track choose *Reference = Linked instance* and pick "Kick In". Linking adds a compensated safety delay of two host buffers (at least 1024 samples), so the source instance has always written the audio before the target reads it. It works within one plugin process while the transport runs. Both tracks need the same latency before Thruma.
-- **Analyze** compares every available reference (sidechain L, R and L+R) and selects the one that best explains the bleed. It reports the coherence it found.
-
-The **gain-reduction display** shows the current reduction per frequency band.
+**Reference tracks:** linking to another Thruma track works when both plugins run in the same DAW process, which is the default in most DAWs, and while the song plays. Otherwise, route the reference mic to Thruma's sidechain input.
 
 ---
 
-## 4. SAMPLES page
+## SAMPLES
 
-- **WAV Browser**: click a file to preview it. Select several and press **Add to instrument** (or double-click) to add them to the selected instrument. Files are re-sorted into velocity layers by measured loudness: samples within 1.5 dB of each other form one round-robin group.
-- **Import Folder…**: assigns every WAV in a folder tree to instruments by name. It recognises kick, snare, tom/floor, hat, crash, ride, china and splash, in file or folder names.
-- **Kit list**: the instruments with their sample counts. Select one to edit it.
-- **Layers**: each row is a velocity layer with its velocity range (1–127) and its round-robin samples.
-  - Click a sample to preview it; Shift-click to remove it.
-  - Drop files on a row to add round-robin samples to that layer.
-  - Drop anywhere else on the page to auto-layer the files.
-  - **Auto velocity** spreads the layer ranges evenly.
-  - **Round robin / Random** sets how samples within a layer alternate. Random never repeats the same sample twice in a row.
-  - **MIDI note** sets the note used for MIDI output and for triggering by MIDI input. General MIDI defaults are used.
-- **Load Kit… / Save Kit… / New Kit**: kits are `.thrumakit` files, which are JSON listing your original file paths. Samples are never copied or converted on disk. Missing files are shown in red.
-
-Samples are converted to the session's sample rate with a high-quality windowed-sinc resampler when they load, so playback has no interpolation artifacts.
+- **WAV Browser:** click a file to preview it. Select files and press **Add to instrument** (or double-click) to add them to the selected instrument. Files are sorted into velocity layers by loudness; samples of similar loudness alternate as round-robin.
+- **Import Folder…:** assigns every WAV in a folder to instruments by name (kick, snare, tom/floor, hat, crash, ride, china, splash).
+- **Kit list:** select an instrument to edit it.
+- **Layers:** each row is a velocity layer (velocity range 1–127) with its round-robin samples. Drop files on a row to add them to that layer. Shift-click a sample to remove it. **Round robin / Random** sets how the samples alternate. **MIDI note** is the note used for MIDI.
+- **Load Kit… / Save Kit… / New Kit:** kits are `.thrumakit` files that point to your original WAV files. Samples are never copied or changed.
 
 ---
 
-## 5. MIDI
-- **Out**: every detected or edited hit becomes a note-on (velocity 1–127) plus a note-off 50 ms later, on channel 10. In your DAW, route Thruma's MIDI output to an instrument track to drive a drum sampler.
-- **In**: notes that match a kit slot's MIDI note trigger that slot. This works regardless of the Triggers setting, and MIDI-triggered notes are not echoed back out.
-- **Export MIDI**: writes the edited trigger list as a Standard MIDI File at the current host tempo.
+## MIDI
+- Thruma's MIDI output sends every hit as a note on channel 10. Route it to a drum instrument in your DAW.
+- MIDI notes sent *into* Thruma play the kit sound with that MIDI note.
 
-## 6. Saving, recall and automation
-All parameters, the kit (as file paths), the trigger list, the analysis results, the link names and a waveform overview are stored in your project. Automatable parameters can be automated in the host. Lookahead, Debleed On and Reference change latency, so they are not automatable.
+## Saving
+Your project stores everything: settings, the kit (as file paths), the notes, what Thruma learned, and the reference choice.

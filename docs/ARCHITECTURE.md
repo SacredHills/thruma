@@ -20,7 +20,7 @@ packaging/   Inno Setup script, macOS pkg script, Linux install script
 ## Signal flow (per block)
 
 ```
-input ──┬─► capture (host timeline) ─────────────────────────────► waveform editor / Analyze
+input ──┬─► listening buffer (host timeline) ──────────────────────► track lane / background learning
         ├─► LinkHub publish (if "Share this track as")
         │
         └─► [link safety delay] ─► DEBLEED (STFT, N = 1024 @ ≤ 50 kHz) ─► REPLACE ─► output
@@ -38,10 +38,10 @@ Each instrument profile defines a **body band**, used for level, velocity and co
 1. Both bands are filtered: 4th-order Butterworth high-pass plus a low-pass. Each band gets a peak-hold envelope; the hold is long enough to bridge zero crossings, so low frequencies produce no ripple.
 2. A **candidate** starts when the attack-band (or body-band) envelope rises by more than the sensitivity-dependent threshold within the rise window and is above the bleed floor. The floor is a minimum statistic over about 400 ms.
 3. The candidate is **confirmed** after the velocity window (2.5–6 ms) only if all of these hold:
-   - **Level**: its body peak is within the instrument's level range of the reference level, which is either the adaptive running reference or, from Analyze, the 98th percentile of the take.
+   - **Level**: its body peak is within the instrument's level range of the reference level, which is either the adaptive running reference or, from background learning, the 98th percentile of the recent playing.
    - **Rise**: the body rose. While the previous hit still rings, a hit-like attack is also required, which rejects beating between overlapping decays. Alternatively, a strong fresh attack on a ringing drum confirms a double hit.
    - **Focus**: body vs. full-band level shows the energy is mostly in-band.
-   - **Fingerprint**: for quieter, uncertain candidates, the 8-band spectral shape must match the instrument's fingerprint. The fingerprint is learned from confident hits, or from the whole take by Analyze.
+   - **Fingerprint**: for quieter, uncertain candidates, the 8-band spectral shape must match the instrument's fingerprint. The fingerprint is learned from confident hits, and refreshed by background learning.
 4. **Positioning**: the detector walks back from the candidate's peak to the first threshold crossing of a 0.7 ms-held envelope of the signal high-passed at half the attack band. Low ringing from the previous hit is ignored.
 5. **Velocity** is the body peak mapped over the dynamic range below the reference. A hit more than 14 dB below the reference is flagged as a ghost note.
 
@@ -63,12 +63,12 @@ The STFT uses a sqrt-Hann window at 75 % overlap, with N = 1024/2048/4096 by sam
 
 - **Target model** `E`: at frames containing a detected onset, `E = max(E, P − B_ref)`; otherwise `E` decays with the bin's learned time constant τ. The detector runs on the input, which is N samples ahead of the STFT output, so onsets are always known in time (lookahead).
 - **Bleed estimate**:
-  - Reference mode: `B = |H|²·|R|²`, where `H = S_xr / S_rr` is learned with weights proportional to how bleed-dominated the bin is. Analyze can initialise it, blended by learning confidence. The estimate has a 60 ms release, and the 35 % of excess energy not explained by the target model is added.
+  - Reference mode: `B = |H|²·|R|²`, where `H = S_xr / S_rr` is learned with weights proportional to how bleed-dominated the bin is. Background learning can initialise it, blended by learning confidence. The estimate has a 60 ms release, and the 35 % of excess energy not explained by the target model is added.
   - Blind mode: `B = max(P − E, 0)`.
 - **Gain**: decision-directed Wiener gain with over-subtraction `0.5 + 2.5·Amount`, raised to at least `√(E/P)` (the drum model is never cut), to at least the attack-window protection, and to at least the floor `−MaxReduction·Amount` dB. The gain is smoothed over a constant-Q frequency window and then in time: instant open, release set by the Release control.
 - The same real gain is applied to all channels, so the output is zero-phase and phase-coherent across channels.
 
-**Analyze** (offline):
+**Background learning** (worker thread, last 90 s heard, every 20 s):
 1. Two-pass take detection.
 2. Classifies inactive frames, falling back to shorter decay windows for dense playing.
 3. Computes the bleed floor.

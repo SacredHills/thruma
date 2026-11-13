@@ -29,8 +29,7 @@ target_sources(Thruma PRIVATE
     PluginEditor.cpp
     UI/LookAndFeel.cpp
     UI/Widgets.cpp
-    UI/WaveformEditor.cpp
-    UI/LiveScope.cpp
+    UI/TrackerLane.cpp
     UI/ReplacePage.cpp
     UI/DebleedPage.cpp
     UI/SamplesPage.cpp)

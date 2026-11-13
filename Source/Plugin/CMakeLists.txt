@@ -63,8 +63,8 @@ target_link_libraries(Thruma
 #-------------------------------------------------------------------------------
 # Install rules (used by the Linux package; Windows/macOS installers use packaging/ scripts)
 if(UNIX AND NOT APPLE)
-    get_target_property(THRUMA_VST3_DIR Thruma_VST3 LIBRARY_OUTPUT_DIRECTORY)
-    install(DIRECTORY "${THRUMA_VST3_DIR}/Thruma.vst3" DESTINATION lib/vst3 USE_SOURCE_PERMISSIONS)
+    # TARGET_FILE is Thruma.vst3/Contents/x86_64-linux/Thruma.so -> install the whole bundle
+    install(DIRECTORY "$<TARGET_FILE_DIR:Thruma_VST3>/../../" DESTINATION lib/vst3/Thruma.vst3 USE_SOURCE_PERMISSIONS)
     install(FILES "${PROJECT_SOURCE_DIR}/README.md" "${PROJECT_SOURCE_DIR}/docs/USER_GUIDE.md"
             DESTINATION share/doc/thruma)
 endif()

@@ -5,7 +5,8 @@ add_executable(thruma_tests
     TestSampleEngine.cpp
     TestReplace.cpp
     TestDebleed.cpp
-    TestRealtime.cpp)
+    TestRealtime.cpp
+    TestRealRecordings.cpp)
 
 target_link_libraries(thruma_tests PRIVATE thruma_core)
 target_compile_definitions(thruma_tests PRIVATE THRUMA_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")

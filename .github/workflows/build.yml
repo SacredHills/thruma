@@ -1,0 +1,188 @@
+name: Build, test & package
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-22.04
+            generator: Ninja
+          - name: Windows x64
+            os: windows-2022
+            generator: Visual Studio 17 2022
+          - name: macOS Universal
+            os: macos-14
+            generator: Ninja
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          v=$(grep -m1 -oE 'project\(Thruma VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libasound2-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxext-dev libfreetype6-dev libfontconfig1-dev xvfb
+
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew list ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cmake -B build -G "${{ matrix.generator }}" -A x64
+          else
+            cmake -B build -G "${{ matrix.generator }}" -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+          fi
+
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel 4
+
+      - name: DSP test suite
+        run: ctest --test-dir build -C ${{ env.BUILD_TYPE }} --output-on-failure
+
+      - name: Locate VST3
+        id: vst3
+        shell: bash
+        run: |
+          p=$(find build -type d -name Thruma.vst3 -path "*VST3*" | head -n1)
+          echo "path=$p" >> "$GITHUB_OUTPUT"
+          echo "VST3 at $p"
+          ls -R "$p" | head -30
+          v=$(find build -type f \( -name ThrumaHostValidator -o -name ThrumaHostValidator.exe \) | head -n1)
+          echo "validator=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Host validation (real VST3 binary)
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            xvfb-run -a "${{ steps.vst3.outputs.validator }}" "${{ steps.vst3.outputs.path }}"
+          else
+            "${{ steps.vst3.outputs.validator }}" "${{ steps.vst3.outputs.path }}"
+          fi
+
+      - name: pluginval
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Linux)   zip=pluginval_Linux.zip;   exe=./pluginval ;;
+            Windows) zip=pluginval_Windows.zip; exe=./pluginval.exe ;;
+            macOS)   zip=pluginval_macOS.zip;   exe=./pluginval.app/Contents/MacOS/pluginval ;;
+          esac
+          curl -sSL -o pv.zip "https://github.com/Tracktion/pluginval/releases/latest/download/$zip"
+          unzip -q -o pv.zip
+          args="--strictness-level 5 --validate-in-process --timeout-ms 900000 --output-dir pluginval-logs"
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            xvfb-run -a $exe $args --validate "${{ steps.vst3.outputs.path }}"
+          else
+            $exe $args --validate "${{ steps.vst3.outputs.path }}"
+          fi
+
+      - name: Package (Windows installer + portable zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y; }
+          $src = Split-Path -Parent "${{ steps.vst3.outputs.path }}"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "/DSourceDir=$((Resolve-Path $src).Path)" "/DOutputDir=$((Resolve-Path dist).Path)" packaging\windows\Thruma.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $portable = "dist\Thruma-${{ steps.ver.outputs.version }}-Windows-x64-Portable"
+          New-Item -ItemType Directory -Force $portable | Out-Null
+          Copy-Item -Recurse "${{ steps.vst3.outputs.path }}" $portable
+          Copy-Item README.md, docs\USER_GUIDE.md $portable
+          Compress-Archive -Path "$portable\*" -DestinationPath "$portable.zip"
+          Remove-Item -Recurse $portable
+
+      - name: Package (macOS .pkg + zip)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE_P12" ]]; then
+            echo "$APPLE_CERTIFICATE_P12" | base64 --decode > cert.p12
+            security create-keychain -p ci build.keychain
+            security default-keychain -s build.keychain
+            security unlock-keychain -p ci build.keychain
+            security import cert.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+            security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+            rm cert.p12
+          fi
+          packaging/macos/build_pkg.sh "${{ steps.vst3.outputs.path }}" "${{ steps.ver.outputs.version }}" dist
+
+      - name: Package (Linux .deb + .tar.gz)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          (cd build && cpack -G DEB && mv Thruma-*.deb ../dist/)
+          name=Thruma-${{ steps.ver.outputs.version }}-Linux-x86_64
+          mkdir -p "$name"
+          cp -R "${{ steps.vst3.outputs.path }}" "$name/"
+          cp packaging/linux/install.sh README.md docs/USER_GUIDE.md "$name/"
+          tar czf "dist/$name.tar.gz" "$name"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Thruma-${{ runner.os }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Upload pluginval logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluginval-logs-${{ runner.os }}
+          path: pluginval-logs
+          if-no-files-found: ignore
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Thruma-*
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --title "Thruma ${GITHUB_REF_NAME}" --generate-notes

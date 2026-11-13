@@ -193,6 +193,7 @@ struct SessionOptions
     bool ghostNotes = true;
     bool flams = true;
     bool blastSection = true;
+    double snareBreakFrom = -1.0, snareBreakTo = -1.0;   // seconds without snare (rest of the kit keeps playing)
 };
 
 inline Session makeMetalSession (const SessionOptions& o)
@@ -250,6 +251,12 @@ inline Session makeMetalSession (const SessionOptions& o)
         if (beatStep == 0) s.events.push_back ({ Crash, at (st, j * 0.5), r.range (0.55f, 0.7f) });
     }
 
+    if (o.snareBreakTo > o.snareBreakFrom)
+        s.events.erase (std::remove_if (s.events.begin(), s.events.end(), [&] (const Event& e)
+        {
+            const double t = (double) e.pos / s.sr;
+            return e.src == Snare && t >= o.snareBreakFrom && t < o.snareBreakTo;
+        }), s.events.end());
     std::sort (s.events.begin(), s.events.end(), [] (const Event& a, const Event& b) { return a.pos < b.pos; });
 
     // render clean sources with per-hit sample variation (a few synthesised variants per drum)

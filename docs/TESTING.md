@@ -67,7 +67,7 @@ Automated host checks cannot replace a pass through real DAWs before a release:
 1. The plugin scans, loads and shows the editor. Resize the window.
 2. Snare track with bleed:
    - live replace;
-   - Capture → Analyze → edit;
+   - play → hits appear live → drag the threshold → edit hits → Edited playback;
    - Edited playback after moving the playhead and looping;
    - offline bounce/export matches realtime playback.
 3. Debleed on/off and changing the reference: the DAW updates delay compensation, with no clicks.

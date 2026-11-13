@@ -76,6 +76,13 @@ public:
 
     int64_t getPosition() const noexcept { return pos; }
 
+    // --- metering for the live display (read on the audio thread after processSample) ---
+    float getLevelDb() const noexcept { return lastBodyDb; }      // body-band envelope (what is compared to the threshold)
+    float getThresholdDb() const noexcept { return std::max (bodyFloorDb + floorMarginDb, refDb - relRangeDb - ghostRelDb); }
+    float getFloorDb() const noexcept { return bodyFloorDb; }
+    /** True once after a candidate was rejected; its start position is returned. */
+    bool takeRejection (int64_t& where) noexcept { if (rejectedPos < 0) return false; where = rejectedPos; rejectedPos = -1; return true; }
+
     template <typename OnHit>
     void process (const float* x, int n, OnHit&& onHit) noexcept
     {
@@ -137,6 +144,8 @@ private:
     float lastHitPeakDb = -150;
     float atkRefDb = -12.0f;      // adaptive level of the attack band at real hits
     float bodySmoothDb = -180.0f, smoothCoeff = 0.99f;
+    float lastBodyDb = -180.0f;
+    int64_t rejectedPos = -1;
     bool rearmed = true;
 };
 

@@ -189,7 +189,18 @@ void WaveformEditor::timerCallback()
 {
     const auto prevLen = peakCacheLen;
     updatePeakCache();
-    if (! hasFitted && dataLength() > 0) zoomToFit();
+    if (! hasFitted && dataLength() > 0)
+    {
+        if (proc.isTransportPlaying())
+        {
+            // listening live: show a scrolling window of about 8 seconds instead of fitting the first instant
+            spp = juce::jmax (1.0, 8.0 * proc.getCurrentSampleRate() / juce::jmax (1, getWidth()));
+            viewStart = (double) proc.getPlayheadPosition() - getWidth() * spp * 0.9;
+            hasFitted = true;
+            updateScrollBar();
+        }
+        else zoomToFit();
+    }
 
     bool dirty = prevLen != peakCacheLen || proc.isTransportPlaying();
     if (proc.getTriggers().size() != lastTriggerCount)

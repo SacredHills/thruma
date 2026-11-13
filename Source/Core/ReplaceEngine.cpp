@@ -28,6 +28,7 @@ void ReplaceEngine::reset() noexcept
     if (! prepared) return;
     for (auto& d : dryDelay) d.reset();
     samples.reset();
+    scope.reset();
     inPos = 0;
     detector.reset (0);
     const bool en = settings.enabled;

@@ -4,7 +4,10 @@ namespace thruma::ui
 {
 
 ReplacePage::ReplacePage (ThrumaProcessor& p)
-    : proc (p), wave (p),
+    : proc (p), scope (p),
+      debleedInput (p.apvts, ids::dbOn, "Debleed input", "Run the Debleed stage before trigger detection: cleaner triggering with less bleed. "
+                                                          "Adjust it on the DEBLEED page."),
+      wave (p),
       repOn (p.apvts, ids::repOn, "Replace", "Turn drum replacement on or off (MIDI-triggered samples still play)."),
       instrument (p.apvts, ids::instrument, "Instrument", "Which drum this track contains. Selects a tuned detection profile."),
       sample (p.apvts, ids::repSample, "Sample", "Which kit slot plays for detected hits."),
@@ -71,6 +74,8 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
     status.setColour (juce::Label::textColourId, colours::textDim);
     status.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (status);
+    addAndMakeVisible (scope);
+    addAndMakeVisible (debleedInput);
     addAndMakeVisible (wave);
 
     addAndMakeVisible (mainPanel);
@@ -115,6 +120,8 @@ void ReplacePage::resized()
     zoomInBtn.setBounds (bar.removeFromLeft (30));
     bar.removeFromLeft (4);
     fitBtn.setBounds (bar.removeFromLeft (44));
+    bar.removeFromLeft (14);
+    debleedInput.setBounds (bar.removeFromLeft (150));
     exportBtn.setBounds (bar.removeFromRight (100));
     bar.removeFromRight (8);
     status.setBounds (bar);
@@ -143,6 +150,8 @@ void ReplacePage::resized()
     for (juce::Component* c : std::initializer_list<juce::Component*> { &advPanel, &ghost, &retrig, &dynRange, &gain, &offset, &align, &doubleHits, &focus, &polarity, &autoAlign, &midiOut, &latency })
         c->setVisible (showAdvanced);
 
+    scope.setBounds (r.removeFromTop (juce::jlimit (110, 170, r.getHeight() / 2)));
+    r.removeFromTop (8);
     wave.setBounds (r);
 
     mainPanel.setBounds (controls);

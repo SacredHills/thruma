@@ -120,6 +120,8 @@ public:
     bool isLinkSynced() const { return linkSynced.load(); }
     bool isSidechainConnected() const { return sidechainChannels.load() > 0; }
 
+    const DetectionScope& getScope() const { return replace.getScope(); }
+
     // meters / activity
     std::atomic<float> inputPeak { 0.0f }, outputPeak { 0.0f };
     std::atomic<int> hitCounter { 0 };
@@ -192,7 +194,7 @@ private:
     struct HeldHit { int64_t pos; float velocity; bool ghost; };
     std::array<HeldHit, 256> heldHits {};
     int numHeld = 0;
-    int64_t logFinal = 0, logExpectedNext = -1;
+    int64_t logFinal = 0, logExpectedNext = -1, logPendingEnd = 0;
     // automatic learning
     int64_t lastLearnLength = 0;
     int lastLearnInstrument = -1;

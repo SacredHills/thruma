@@ -88,5 +88,5 @@ The STFT uses a sqrt-Hann window at 75 % overlap, with N = 1024/2048/4096 by sam
 See the README for the user-facing list. Technical notes:
 - Linking requires a shared process and host timeline. Without a running transport the reference reads as silence, and debleed falls back to blind mode.
 - The debleed's reference transfer is magnitude-only. Delays between mics larger than roughly the frame length (about 20 ms) reduce reference effectiveness.
-- The capture buffer is allocated when Capture is armed: 4 minutes per channel at the session rate, which is about 46 MB per channel at 48 kHz.
+- The listening buffer is allocated in prepareToPlay: 4 minutes per channel at the session rate, about 46 MB per channel at 48 kHz.
 - Velocity mapping is level-based (dB). Velocity estimation does not use timbre.

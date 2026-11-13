@@ -551,41 +551,55 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
                          pendingNotes[(size_t) numPending++] = { h.outputOffset + noteLen, note, 0, false };
                      });
 
-    // --- live hit log for the editor: report each timeline span once all its hits are known ---
-    if (rs.enabled && rs.source == TriggerSource::Live && engineTimeline >= 0)
+    // --- live hit log for the editor ---
+    // A timeline span is reported once all of its hits are known (detection delay D has passed), together with
+    // those hits; the editor replaces earlier detections in that span. Spans are coalesced (~100 ms) and nothing
+    // is dropped while the editor is busy (e.g. offline bounces running faster than real time).
     {
-        const int D = replace.getDetector().getMaxReportDelay();
-        if (engineTimeline != logExpectedNext) logFinal = engineTimeline - D;   // start / jump / loop
-        const int64_t finalUpTo = engineTimeline + n - D;
-        int start1, size1, start2, size2;
-        const int needed = 1 + numHeld;
-        if (finalUpTo > logFinal && logFifo.getFreeSpace() >= needed)
+        const bool logging = rs.enabled && rs.source == TriggerSource::Live && engineTimeline >= 0;
+        auto flush = [this] (int64_t upTo, bool allHeld)
         {
-            int written = 0;
-            auto put = [&] (const LogEvent& e)
+            if (upTo <= logFinal && ! (allHeld && numHeld > 0)) return true;
+            if (logFifo.getFreeSpace() < 1 + numHeld) return false;
+            auto put = [this] (const LogEvent& e)
             {
-                logFifo.prepareToWrite (1, start1, size1, start2, size2);
-                if (size1 > 0) logEvents[(size_t) start1] = e; else if (size2 > 0) logEvents[(size_t) start2] = e;
-                logFifo.finishedWrite (size1 + size2);
-                ++written;
+                int s1, n1, s2, n2;
+                logFifo.prepareToWrite (1, s1, n1, s2, n2);
+                logEvents[(size_t) (n1 > 0 ? s1 : s2)] = e;
+                logFifo.finishedWrite (n1 + n2);
             };
-            put ({ logFinal, finalUpTo, 0.0f, false, false });
+            if (upTo > logFinal) put ({ logFinal, upTo, 0.0f, false, false });
             int keep = 0;
             for (int i = 0; i < numHeld; ++i)
             {
                 const auto& hh = heldHits[(size_t) i];
-                if (hh.pos < finalUpTo) put ({ hh.pos, 0, hh.velocity, true, hh.ghost });
+                if (allHeld || hh.pos < upTo) put ({ hh.pos, 0, hh.velocity, true, hh.ghost });
                 else heldHits[(size_t) keep++] = hh;
             }
             numHeld = keep;
-            logFinal = finalUpTo;
+            logFinal = std::max (logFinal, upTo);
+            return true;
+        };
+
+        const bool continuous = logging && engineTimeline == logExpectedNext;
+        if (! continuous && logExpectedNext >= 0)
+        {
+            flush (logPendingEnd, true);   // transport stopped / jumped / looped: report what we have
+            logExpectedNext = -1;
         }
-        logExpectedNext = engineTimeline + n;
-    }
-    else
-    {
-        numHeld = 0;
-        logExpectedNext = -1;
+        if (logging)
+        {
+            const int D = replace.getDetector().getMaxReportDelay();
+            if (logExpectedNext < 0) { logFinal = engineTimeline - D; numHeld = numHeld > 0 ? numHeld : 0; }
+            logPendingEnd = engineTimeline + n - D;
+            if (logPendingEnd - logFinal >= (int64_t) (0.1 * currentRate) || numHeld >= (int) heldHits.size() / 2)
+                flush (logPendingEnd, false);
+            logExpectedNext = engineTimeline + n;
+        }
+        else
+        {
+            numHeld = 0;
+        }
     }
 
     // --- auditioning / previews (always audible at unity) ---

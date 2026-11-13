@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LiveScope.h"
 #include "WaveformEditor.h"
 #include "Widgets.h"
 
@@ -29,6 +30,8 @@ private:
     juce::TextButton analyzeBtn { "Re-detect" }, clearBtn { "Clear" }, undoBtn { "Undo" }, redoBtn { "Redo" },
                      fitBtn { "Fit" }, zoomInBtn { "+" }, zoomOutBtn { "-" }, exportBtn { "Export MIDI" }, auditionBtn { "Audition" };
     juce::Label status, liveBadge;
+    LiveScope scope;
+    ParamToggle debleedInput;
     WaveformEditor wave;
 
     // main controls

@@ -8,6 +8,7 @@
 
 #include "SampleEngine.h"
 #include "TransientDetector.h"
+#include "DetectionScope.h"
 #include "Triggers.h"
 
 #include <array>
@@ -63,6 +64,8 @@ public:
     const TransientDetector& getDetector() const noexcept { return detector; }
     TransientDetector& getDetector() noexcept { return detector; }
     SampleEngine& getSampleEngine() noexcept { return samples; }
+    DetectionScope& getScope() noexcept { return scope; }
+    const DetectionScope& getScope() const noexcept { return scope; }
 
     /** io: in/out audio. timelinePos: host timeline position of this input block (for Edited triggers),
         -1 if unknown. kit/triggers may be null. onHit(const ReplaceHitInfo&) is called for each scheduled hit. */
@@ -85,6 +88,7 @@ private:
     float dryGainCur = 0.0f, wetGainCur = 1.0f, outGainCur = 1.0f;
     int64_t inPos = 0;
     bool prepared = false;
+    DetectionScope scope;
 };
 
 //==============================================================================
@@ -109,7 +113,11 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
     for (int i = 0; i < n; ++i)
     {
         DetectedHit h;
-        if (detector.processSample (mono[(size_t) i], h) && settings.enabled && settings.source == TriggerSource::Live)
+        const bool hit = detector.processSample (mono[(size_t) i], h);
+        scope.push (detector.getLevelDb(), detector.getThresholdDb(), detector.getFloorDb());
+        if (int64_t rej; detector.takeRejection (rej)) scope.event (rej, -1.0f);
+        if (hit) scope.event (h.position, h.velocity);
+        if (hit && settings.enabled && settings.source == TriggerSource::Live)
         {
             const int off = (int) (h.position - blockStart) + lookahead + alignShift;
             scheduleHit (kit, kitSeq, detectedSlot, h.velocity, std::max (0, off));
@@ -117,6 +125,7 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
         }
     }
     inPos += n;
+    scope.referenceDb.store (detector.getVelocityReference(), std::memory_order_relaxed);
 
     // 2) edited triggers on the host timeline
     if (settings.enabled && settings.source == TriggerSource::Edited && triggers != nullptr && timelinePos >= 0)

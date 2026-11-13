@@ -115,7 +115,6 @@ StateInfo inspectState (juce::AudioPluginInstance& p)
         std::cout << "    (could not decode state, " << mb.getSize() << " bytes: " << juce::String::toHexString (mb.getData(), juce::jmin (48, (int) mb.getSize())) << ")" << std::endl;
         return info;
     }
-    if (std::getenv ("THRUMA_DEBUG_STATE") != nullptr) std::cout << xml->toString().substring (0, 600) << std::endl;
     if (auto* t = xml->getChildByName ("TRIGGERS"))
     {
         juce::MemoryOutputStream mo;
@@ -124,6 +123,17 @@ StateInfo inspectState (juce::AudioPluginInstance& p)
             uint32_t n;
             std::memcpy (&n, static_cast<const char*> (mo.getData()) + 4, 4);
             info.triggers = (int) n;
+            if (std::getenv ("THRUMA_DEBUG_STATE") != nullptr)
+            {
+                std::cout << "    trigger slots:";
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    int64_t pos;
+                    std::memcpy (&pos, static_cast<const char*> (mo.getData()) + 8 + i * 17, 8);
+                    std::cout << " " << (pos - 480000) / 12000.0;
+                }
+                std::cout << std::endl;
+            }
         }
         info.learned = t->hasAttribute ("refDb");
     }
@@ -151,6 +161,11 @@ void playTransport (juce::AudioPluginInstance& p, TestPlayHead& ph, int64_t from
         p.processBlock (buf, midi);
         if ((pos / block) % 8 == 0) juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
     }
+    // press stop: a few blocks with the transport halted
+    ph.playing = false;
+    for (int i = 0; i < 8; ++i) { buf.clear(); midi.clear(); p.processBlock (buf, midi); }
+    ph.playing = true;
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
 }
 
 /** Impulse in -> measure where it comes out; must equal the reported latency (layer mode, empty kit). */
@@ -306,14 +321,14 @@ int main (int argc, char** argv)
         playTransport (*fresh, ph, 480000, 12.0, 512);   // 12 s starting at 0:10, a hit every 250 ms
         for (int i = 0; i < 40 && ! inspectState (*fresh).learned; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         auto st = inspectState (*fresh);
-        check (st.triggers >= 46 && st.triggers <= 50, "hits logged live into the editor while playing: " + juce::String (st.triggers) + " (expected 48)");
+        check (st.triggers >= 47 && st.triggers <= 49, "hits logged live into the editor while playing: " + juce::String (st.triggers) + " (expected 48)");
         check (st.overview, "track audio recorded for the waveform without pressing anything");
         check (st.learned, "detection auto-learned from the track while playing");
 
         playTransport (*fresh, ph, 480000, 12.0, 512);   // loop the same section
         juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
         st = inspectState (*fresh);
-        check (st.triggers >= 46 && st.triggers <= 50, "replaying a section re-detects without duplicates: " + juce::String (st.triggers));
+        check (st.triggers >= 47 && st.triggers <= 49, "replaying a section re-detects without duplicates: " + juce::String (st.triggers));
         fresh->releaseResources();
         fresh->setPlayHead (nullptr);
     }

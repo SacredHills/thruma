@@ -128,12 +128,12 @@ void TransientDetector::updateDerived() noexcept
     riseThrDb     = lerp (14.0f, 4.0f, s);
     mainRiseMinDb = lerp (3.0f, 2.0f, s);
     floorMarginDb = lerp (12.0f, 4.0f, s);
-    relRangeDb    = p.levelRangeDb + (s - 0.5f) * 16.0f;
+    relRangeDb    = std::max (6.0f, p.levelRangeDb + (s - 0.4f) * 50.0f);   // Sensitivity 0 % -> threshold just below the loudest hits
     ghostRelDb    = settings.ghostSensitivity * 18.0f * p.ghostWeight;
     focusMinDb    = p.focusMinDb - s * 6.0f;
-    specThrDb     = lerp (3.0f, 8.0f, s);
+    specThrDb     = lerp (2.0f, 6.0f, s);
 
-    refDecayPerSample = (float) (1.0 / sr);   // adaptive reference falls 1 dB/s
+    refDecayPerSample = (float) (0.05 / sr);  // adaptive reference falls very slowly (breaks must not lower it)
     smoothCoeff = onePoleCoeff (0.010 * sr);
 }
 
@@ -194,6 +194,7 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
 
     const float bodyDb = fastDb (bodyE);
     const float atkDb  = fastDb (atkE);
+    lastBodyDb = bodyDb;
     bodyDbHist.push (bodyDb);
     atkDbHist.push (atkDb);
     const float bodyRise = bodyDb - bodyDbHist.get (riseWin);
@@ -215,7 +216,7 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
 
     if (! refFixed)
         refDb = std::max (-60.0f, refDb - refDecayPerSample);
-    atkRefDb = std::max (-70.0f, atkRefDb - refDecayPerSample);
+    atkRefDb = std::max (-70.0f, atkRefDb - 20.0f * refDecayPerSample);   // 1 dB/s: tracks the current playing intensity
 
     // smoothed level: robust against momentary dips (beating modes, noisy wires) for re-arming
     bodySmoothDb = bodyDb + (bodySmoothDb - bodyDb) * smoothCoeff;
@@ -306,7 +307,9 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             if (! confident && settings.frequencyFocus && tmpl.isValid())
             {
                 dist = shapeDistance (shape, tmpl);
-                shapeOk = dist <= specThrDb;
+                // the quieter the candidate (closer to the bleed level), the closer it must sound like the drum
+                const float depth = std::clamp ((refDb - peakDb) / std::max (6.0f, relRangeDb + ghostRelDb), 0.0f, 1.0f);
+                shapeOk = dist <= specThrDb * (1.0f - 0.45f * depth);
             }
 
             state = State::Idle;
@@ -364,6 +367,7 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             else
             {
                 cooldownUntil = pos + velWindow / 2;
+                if (levelOk) rejectedPos = candStart;   // loud enough but not drum-like: show it on the scope
             }
         }
     }

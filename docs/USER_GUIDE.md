@@ -8,32 +8,28 @@ Most controls have tooltips: hover over them for a short explanation. Double-cli
 
 ## 1. Typical workflows
 
-### Live replacement (quickest)
+### Replacement (everything is real time)
 1. Insert Thruma on the drum track and choose its **Instrument** (Kick, Snare, Tom 1–4, Hi-Hat, Crash, Ride, China, Splash).
 2. Give that instrument some samples: drop WAV files onto the REPLACE page, or use the SAMPLES page.
-3. Play. Adjust **Sensitivity** until every hit lights the LED and bleed does not.
+3. Press play in your DAW. There is nothing to record or analyse first: Thruma listens to the track it is on.
+   - The **live trigger view** shows the drum's level (teal), the **threshold** (amber line), the measured bleed floor (grey line), every triggered hit (amber marks) and every candidate it rejected as bleed (grey ×).
+   - Too many false triggers? **Drag the amber threshold line up** (or lower Sensitivity) until the bleed stays under it. Missing quiet hits? Drag it down, or raise **Ghost Notes** in Advanced.
+   - Turn on **Debleed input** in the toolbar to run Debleed before detection, which lowers the bleed the detector sees.
 4. Choose **Mode**:
    - **Replace** crossfades the original and the sample with **Blend**.
    - **Layer** keeps the original and adds the sample at the **Blend** level.
 
 If the selected instrument has no samples, the original passes through untouched, so the track never goes silent.
 
-### Tracker-style editing (most accurate)
-1. Press **CAPTURE** and play the section (up to 4 minutes per instance). Thruma records its input on the host timeline. Nothing in your project is changed.
-2. Press **ANALYZE**. Thruma runs two passes over the whole take: it learns the loudest hits and the drum's spectral fingerprint, then detects again with those settings. Velocities are therefore consistent across the take, and bleed that does not look like the drum is rejected. The trigger source switches to **Edited triggers** automatically.
-3. Correct anything you need in the waveform editor (see below). Playback now uses your edited list.
-4. Optionally use **Export MIDI** to save the performance as a `.mid` file.
+While the track plays, Thruma also learns in the background, with no button to press. It learns the level of your real hits and the drum's spectral fingerprint, which makes detection more consistent after the first few seconds. If Debleed is on, it also learns the drum's decay and the bleed.
+
+### Fixing individual hits
+Every detected hit appears in the waveform editor below the live view while the song plays. Re-playing a section re-detects it, without duplicates. Edit anything there (see below). As soon as you edit, **Triggers** switches to *Edited triggers*, so your corrections are what plays back. Hits you added or changed are kept even if you switch back to *Live detection*. **Re-detect** re-runs detection over everything heard so far with the current settings. **Export MIDI** saves the performance as a `.mid` file.
 
 ### Debleed
 1. Turn on **Debleed** (on the DEBLEED page). This adds about 21 ms of compensated latency.
 2. Choose a **Reference** if you have one (see section 3). Otherwise, *None (blind)* works from the drum's own hits.
-3. Capture a section on the REPLACE page, then press **ANALYZE** on DEBLEED. Thruma learns:
-   - the drum's decay per frequency
-   - its fingerprint
-   - the bleed spectrum
-   - how the reference leaks into this mic
-
-   It then picks the best reference and sets a suitable Amount.
+3. Play the track. Debleed adapts automatically: it learns the drum's decay per frequency, its fingerprint, the bleed spectrum and how the reference leaks into this mic. **Learn now** additionally picks the best reference input and sets a suitable Amount from everything heard so far.
 4. Fine-tune with **Amount** and **Release**, and watch the gain-reduction display.
 
 Debleed runs **before** replacement, so live detection also benefits from the cleaner signal.
@@ -64,7 +60,7 @@ Ghost notes (more than 14 dB below the loudest hits) are drawn dimmer.
 | **Triggers** | *Live detection*, *Edited triggers* (the list in the editor, following the host timeline) or *MIDI only* |
 | **Mode** | *Replace* or *Layer* (see above) |
 | **Replace** switch | Turns triggering off. MIDI-triggered samples still play |
-| **Sensitivity** | Higher catches quieter hits; lower rejects more bleed |
+| **Sensitivity** | Higher catches quieter hits; lower rejects more bleed. The same control as dragging the threshold line in the live view. At 0 % the threshold sits just below your loudest hits |
 | **Velocity Response** | 0 % plays every hit at full level; 100 % follows the played dynamics across the *Dynamic Range* |
 | **Blend** | Replace: original ↔ sample balance. Layer: sample level |
 | **Output** | Output level |
@@ -98,7 +94,7 @@ The debleed is **not a gate**. For every frequency band it estimates how much of
 
 | Control | What it does |
 |---|---|
-| **Debleed** | On/off (non-automatable, because it changes latency) |
+| **Debleed** | On/off (non-automatable, because it changes latency). Also available as **Debleed input** on the REPLACE page: debleed always runs before trigger detection |
 | **Instrument** | Shared with REPLACE |
 | **Reference** | *None (blind)*, *Sidechain L / R / L+R*, or *Linked instance* |
 | **Share this track as** | Publishes this track's input under a name, so other Thruma instances can use it as a reference |

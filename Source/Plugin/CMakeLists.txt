@@ -30,6 +30,7 @@ target_sources(Thruma PRIVATE
     UI/LookAndFeel.cpp
     UI/Widgets.cpp
     UI/WaveformEditor.cpp
+    UI/LiveScope.cpp
     UI/ReplacePage.cpp
     UI/DebleedPage.cpp
     UI/SamplesPage.cpp)

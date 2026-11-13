@@ -201,3 +201,34 @@ TEST_CASE ("Detection: consistent across 44.1 / 48 / 96 kHz")
         }
     }
 }
+
+TEST_CASE ("Detection: loud bleed and a long snare break do not cause false triggers")
+{
+    // Real snare tracks: hi-hat/kick bleed 6 dB louder than the default session, and 12 s where the
+    // snare does not play while the rest of the kit continues (the classic false-trigger situation).
+    sig::SessionOptions o;
+    o.seconds = 30.0;
+    o.bleedScaleDb = 6.0f;
+    o.snareBreakFrom = 8.0;
+    o.snareBreakTo = 20.0;
+    o.seed = 5;
+    const auto s = sig::makeMetalSession (o);
+    for (float sens : { 0.5f, 0.3f })
+    {
+        DetectorSettings ds;
+        ds.instrument = Instrument::Snare;
+        ds.sensitivity = sens;
+        const auto hits = detect (s.mics[sig::Snare], s.sr, ds);
+        const auto sc = sig::scoreOnsets (positions (hits), truthOf (s, sig::Snare, true), s.sr);
+        int inBreak = 0;
+        for (auto& h : hits)
+            if (h.position >= (int64_t) (8.0 * s.sr) && h.position < (int64_t) (20.0 * s.sr)) ++inBreak;
+        char label[64];
+        std::snprintf (label, sizeof label, "snare +6 dB bleed, sens %.0f%%", sens * 100);
+        printScore (label, sc);
+        tf::metric ("  false triggers during the 12 s break", inBreak);
+        CHECK (sc.precision() >= (sens > 0.4f ? 0.85 : 0.95));
+        CHECK (inBreak <= (sens > 0.4f ? 5 : 0));
+        CHECK (truthOf (s, sig::Snare, false).size() > 0);
+    }
+}

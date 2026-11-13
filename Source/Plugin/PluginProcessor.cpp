@@ -116,8 +116,8 @@ ThrumaProcessor::~ThrumaProcessor()
 bool ThrumaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto in = layouts.getMainInputChannelSet(), out = layouts.getMainOutputChannelSet();
-    if (in != out) return false;
-    if (in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo()) return false;
+    if (out != juce::AudioChannelSet::mono() && out != juce::AudioChannelSet::stereo()) return false;
+    if (! in.isDisabled() && in != out) return false;   // no audio input: a MIDI-driven drum instrument
     if (layouts.inputBuses.size() > 1)
     {
         const auto sc = layouts.getChannelSet (true, 1);
@@ -224,6 +224,26 @@ void ThrumaProcessor::timerCallback()
     debleedModelPublisher.collectGarbage();
     liveModelPublisher.collectGarbage();
     previewPublisher.collectGarbage();
+    midiSeqPublisher.collectGarbage();
+    if (previewPlaying.load()) hostBridge.keepAwake();   // hosts that pause idle tracks: keep this one running
+
+    // offline analysis: un-finalizing goes back to live detection; changed detection settings re-analyse
+    if (offlineSource != OfflineSource::None && ! isFinalized() && ! analysing.load())
+        dropOfflineAudio();
+    if (offlineSource != OfflineSource::None && ! analysing.load() && detectionSettingsKey() != analysedKey)
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        if (reanalyseAt <= 0.0) reanalyseAt = now + 0.3;   // wait until a slider drag settles
+        else if (now >= reanalyseAt)
+        {
+            reanalyseAt = 0.0;
+            juce::WeakReference<ThrumaProcessor> weak (this);
+            runOfflineAnalysis (false, [weak] (const juce::String& m)
+            {
+                if (auto* self = weak.get()) { self->offlineMessage = m; ++self->offlineMessageCount; }
+            });
+        }
+    }
     linkedId.store (linkedSourceName.isNotEmpty() ? LinkHub::getInstance().findSource (linkedSourceName.toStdString()) : -1);
     drainHitLog();
     maybeAutoLearn();
@@ -398,6 +418,8 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (inPk > 1.0e-4f) lastSignalBlockTime = internalTimeline;
     const bool signalPresent = internalTimeline - lastSignalBlockTime < (int64_t) (2.0 * currentRate);
 
+    hostBridge.noteCurrentTrack();
+
     int newMode = 0;
     if (hostPlaying || advancing) { newMode = 1; hostTimelineSeen = true; }   // follow the host transport
     else if (! hostTimelineSeen && signalPresent) newMode = 2;              // host gives no position: own clock
@@ -410,9 +432,34 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
     if (newMode != 0) lastActiveMode = newMode;
 
-    const bool playing = newMode != 0;
-    const int64_t timeline = newMode == 1 ? hostTime : internalTimeline;
-    blockHasBeat = newMode == 1 && pos.hasValue() && pos->getPpqPosition().hasValue() && pos->getBpm().hasValue() && *pos->getBpm() > 1.0;
+    bool playing = newMode != 0;
+    int64_t timeline = newMode == 1 ? hostTime : internalTimeline;
+    bool previewing = false;
+    if (previewPlaying.load (std::memory_order_relaxed) && ! (hostPlaying || advancing))
+    {
+        // in-plugin playback of imported audio: it replaces the input, on its own timeline
+        const int64_t pp = previewPos.load (std::memory_order_relaxed);
+        const auto origin = capture.origin.load (std::memory_order_relaxed);
+        const auto len = capture.length.load (std::memory_order_relaxed);
+        const int outCh = juce::jmin (buffer.getNumChannels(), juce::jmax (1, getMainBusNumOutputChannels()));
+        for (int c = 0; c < outCh; ++c)
+        {
+            auto* d = buffer.getWritePointer (c);
+            for (int i = 0; i < total; ++i)
+            {
+                const int64_t k = pp + i - origin;
+                d[i] = (origin >= 0 && k >= 0 && k < len) ? capture.data[0][(size_t) k] : 0.0f;
+            }
+        }
+        previewing = true;
+        playing = true;
+        timeline = pp;
+        previewPos.store (pp + total, std::memory_order_relaxed);
+        if (origin < 0 || pp + total >= origin + len) previewPlaying.store (false);
+    }
+    else if (previewPlaying.load (std::memory_order_relaxed))
+        previewPlaying.store (false);   // the host started playing: it takes over
+    blockHasBeat = ! previewing && newMode == 1 && pos.hasValue() && pos->getPpqPosition().hasValue() && pos->getBpm().hasValue() && *pos->getBpm() > 1.0;
     if (blockHasBeat)
     {
         blockBeat = *pos->getPpqPosition();
@@ -439,7 +486,9 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
     const bool playing = blockPlaying;
     juce::ignoreUnused (pos);
 
-    auto mainBus = getBusBuffer (buffer, true, 0);
+    // the main output bus shares its channels with the main input (and still works without an audio input,
+    // e.g. on a MIDI/instrument track)
+    auto mainBus = getBusBuffer (buffer, false, 0);
     const int nch = juce::jlimit (1, 2, juce::jmin (mainBus.getNumChannels(), mainChannels));
     if (mainBus.getNumChannels() == 0) return;
     float* ch[2] = { mainBus.getWritePointer (0, start), nch > 1 ? mainBus.getWritePointer (1, start) : nullptr };
@@ -561,13 +610,18 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
             }
             if (idx + n > capture.length.load (std::memory_order_relaxed))
                 capture.length.store (idx + n, std::memory_order_release);
-
-            // the DAW's beat grid, so exported MIDI lands exactly where the DAW expects it (tempo changes included)
-            if (blockHasBeat)
-                for (int64_t b = (idx + kBeatBin - 1) / kBeatBin; b * kBeatBin < idx + n && b < (int64_t) beatMap.size(); ++b)
-                    beatMap[(size_t) b] = blockBeat + (double) (b * kBeatBin - idx + (chunkTimeline - blockTimeline)) * blockBeatsPerSample;
         }
     }
+
+    // the DAW's beat grid, so exported MIDI lands exactly where the DAW expects it (tempo changes included);
+    // recorded whenever the song plays, also for analysed / finalized notes
+    if (playing && blockHasBeat)
+        if (const auto origin = capture.origin.load (std::memory_order_relaxed); origin >= 0)
+        {
+            const int64_t idx = chunkTimeline - origin;
+            for (int64_t b = std::max<int64_t> (0, (idx + kBeatBin - 1) / kBeatBin); b * kBeatBin < idx + n && b < (int64_t) beatMap.size(); ++b)
+                beatMap[(size_t) b] = blockBeat + (double) (b * kBeatBin - idx + (chunkTimeline - blockTimeline)) * blockBeatsPerSample;
+        }
 
     // --- linked-reference alignment delay ---
     if (configuredLinked && linkDelay > 0)
@@ -591,6 +645,29 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
     const int64_t engineTimeline = playing ? chunkTimeline - (configuredDebleed ? debleed.getLatency() : 0) - linkDelay : -1;
     const TriggerSnapshot* snap = trigH != nullptr ? trigH->object.get() : nullptr;
     const int noteLen = msToSamples (50.0, currentRate);
+
+    // --- imported MIDI file: notes on the host's beat grid play the kit (scheduled for the output, which the
+    // host delays by our latency, so they sound exactly on their beat) ---
+    if (const auto* sqH = midiSeqPublisher.acquire())
+    {
+        const auto& notes = sqH->object->notes;
+        if (playing && blockHasBeat && engineTimeline >= 0 && kit != nullptr && ! notes.empty() && blockBeatsPerSample > 0.0)
+        {
+            const int L = replace.getLatency();
+            const int64_t outStart = engineTimeline - L;   // song position of this chunk's output
+            const double b0 = blockBeat + (double) (outStart - blockTimeline) * blockBeatsPerSample;
+            const double b1 = b0 + (double) n * blockBeatsPerSample;
+            auto it = std::lower_bound (notes.begin(), notes.end(), b0, [] (const MidiBeatNote& a, double b) { return a.beat < b; });
+            for (; it != notes.end() && it->beat < b1 && numMidi < (int) midiTriggers.size(); ++it)
+            {
+                const int slot = kit->findInstrumentForNote (it->note);
+                if (slot < 0) continue;
+                const int i = juce::jlimit (0, n - 1, (int) ((it->beat - b0) / blockBeatsPerSample));
+                midiTriggers[(size_t) numMidi++] = { i - L, slot, (float) it->velocity / 127.0f };
+            }
+        }
+        midiSeqPublisher.reportOldestInUse (sqH->seq);
+    }
     replace.process (ch, nch, n, engineTimeline, kit, kitSeq, snap, midiTriggers.data(), numMidi,
                      [&] (const ReplaceHitInfo& h)
                      {
@@ -795,14 +872,31 @@ void ThrumaProcessor::clearCapture()
 
 void ThrumaProcessor::clearAll()
 {
+    previewPlaying.store (false);
+    dropOfflineAudio();
+    clearMidiFile();
     commitTriggerEdit ({}, "Clear", false);
     clearCapture();
     if (auto* src = apvts.getParameter (ids::repSource))
         src->setValueNotifyingHost (src->convertTo0to1 ((float) TriggerSource::Live));
 }
 
+float ThrumaProcessor::getCurrentReferenceDb() const
+{
+    return offlineSource != OfflineSource::None ? offlineRefDb : replace.getScope().referenceDb.load();
+}
+
 float ThrumaProcessor::getCurrentThresholdDb() const
 {
+    if (offlineSource != OfflineSource::None)
+    {
+        // the analysis' level reference with the current settings (same mapping as the detector), so the line
+        // follows a drag right away; the notes follow once the re-analysis is done
+        const auto& prof = getProfile ((Instrument) (int) apvts.getRawParameterValue (ids::instrument)->load());
+        const float s = apvts.getRawParameterValue (ids::repSens)->load() * 0.01f * 0.8f;
+        const float ghost = apvts.getRawParameterValue (ids::repGhost)->load() * 0.01f * 18.0f * prof.ghostWeight;
+        return offlineRefDb - std::max (6.0f, prof.levelRangeDb + (s - 0.4f) * 50.0f) - ghost;
+    }
     const auto& sc = replace.getScope();
     const auto w = sc.pointsWritten.load (std::memory_order_acquire);
     return w > 0 ? sc.threshold[(size_t) ((w - 1) % DetectionScope::kPoints)].load (std::memory_order_relaxed) : -40.0f;
@@ -895,64 +989,245 @@ void ThrumaProcessor::importAudio (const juce::File& file, std::function<void (c
 {
     std::unique_ptr<juce::AudioFormatReader> reader (kitManager.getFormatManager().createReaderFor (file));
     if (reader == nullptr) { if (onDone) onDone ("Could not read " + file.getFileName()); return; }
-    if (analysing.exchange (true)) { if (onDone) onDone ("Busy - try again in a moment."); return; }
+    if (analysing.load()) { if (onDone) onDone ("Busy - try again in a moment."); return; }
 
     const double fileRate = reader->sampleRate;
     const auto maxLen = (int64_t) (fileRate * 600.0);   // up to 10 minutes
     const int len = (int) std::min<juce::int64> (reader->lengthInSamples, maxLen);
     juce::AudioBuffer<float> buf ((int) juce::jmax (1u, juce::jmin (2u, reader->numChannels)), len);
     reader->read (&buf, 0, len, 0, true, buf.getNumChannels() > 1);
-    auto mono = std::make_shared<std::vector<float>> ((size_t) len);
+    std::vector<float> mono ((size_t) len);
     for (int i = 0; i < len; ++i)
     {
         float v = 0.0f;
         for (int c = 0; c < buf.getNumChannels(); ++c) v += buf.getSample (c, i);
-        (*mono)[(size_t) i] = v / (float) buf.getNumChannels();
+        mono[(size_t) i] = v / (float) buf.getNumChannels();
     }
+    auto audio = std::make_shared<const std::vector<float>> (std::abs (fileRate - currentRate) > 0.5 ? resampleHighQuality (mono, fileRate, currentRate)
+                                                                                                    : std::move (mono));
+    installOfflineAudio (audio, 0, file.getFileName(), OfflineSource::File, std::move (onDone));
+}
+
+void ThrumaProcessor::analyseTrack (std::function<void (const juce::String&)> onDone)
+{
+    if (analysing.load()) { if (onDone) onDone ("Busy - try again in a moment."); return; }
+    if (canReadHostTrack())
+    {
+        const double hostRate = hostBridge.hostSampleRate() > 0.0 ? hostBridge.hostSampleRate() : currentRate;
+        auto mono = hostBridge.readWholeTrack ((int64_t) (hostRate * 600.0));
+        if (mono.empty()) { if (onDone) onDone ("This track has no audio to analyse yet."); return; }
+        auto audio = std::make_shared<const std::vector<float>> (std::abs (hostRate - currentRate) > 0.5 ? resampleHighQuality (mono, hostRate, currentRate)
+                                                                                                        : std::move (mono));
+        installOfflineAudio (audio, 0, trackName.isNotEmpty() ? trackName : juce::String ("the track"), OfflineSource::HostTrack, std::move (onDone));
+        return;
+    }
+    // hosts that do not hand plugins the track: analyse everything heard so far
+    const auto origin = capture.origin.load();
+    const auto len = capture.length.load();
+    if (origin < 0 || len <= 0)
+    {
+        if (onDone) onDone ("This DAW does not let plugins read the whole track. Play the song once, then press Analyze - or use Import Audio.");
+        return;
+    }
+    auto audio = std::make_shared<const std::vector<float>> (capture.data[0].begin(), capture.data[0].begin() + (long) len);
+    installOfflineAudio (audio, origin, "what was played", OfflineSource::Heard, std::move (onDone));
+}
+
+void ThrumaProcessor::installOfflineAudio (std::shared_ptr<const std::vector<float>> audio, int64_t origin, const juce::String& name,
+                                           OfflineSource src, std::function<void (const juce::String&)> onDone)
+{
+    previewPlaying.store (false);
+    offlineAudio = std::move (audio);
+    offlineOrigin = origin;
+    offlineSource = src;
+    offlineName = name;
+    analysedKey = {};
+    reanalyseAt = 0.0;
+    runOfflineAnalysis (true, std::move (onDone));
+}
+
+void ThrumaProcessor::dropOfflineAudio()
+{
+    previewPlaying.store (false);
+    offlineAudio.reset();
+    offlineSource = OfflineSource::None;
+    offlineName = {};
+    analysedKey = {};
+    reanalyseAt = 0.0;
+}
+
+juce::String ThrumaProcessor::detectionSettingsKey() const
+{
+    juce::String k;
+    for (auto* id : { ids::instrument, ids::repSens, ids::repGhost, ids::repRetrig, ids::repDouble, ids::repFocus, ids::repDynRange })
+        if (auto* v = apvts.getRawParameterValue (id)) k << juce::String (v->load(), 4) << ";";
+    return k;
+}
+
+void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (const juce::String&)> onDone)
+{
+    if (offlineAudio == nullptr) return;
+    if (analysing.exchange (true)) { if (initial && onDone) onDone ("Busy - try again in a moment."); return; }
 
     ReplaceSettings rs; DebleedSettings ds; ReferenceSource ref; bool mo;
     readParameters (rs, ds, ref, mo);
     const double sr = currentRate;
-    const auto name = file.getFileName();
+    const auto key = detectionSettingsKey();
+    const auto audio = offlineAudio;
+    const auto origin = offlineOrigin;
+    const auto name = offlineName;
     juce::WeakReference<ThrumaProcessor> weak (this);
 
-    workers->addJob ([weak, mono, fileRate, sr, rs, name, onDone]
+    workers->addJob ([weak, audio, origin, sr, rs, key, name, initial, onDone]
     {
-        auto audio = std::make_shared<std::vector<float>> (std::abs (fileRate - sr) > 0.5 ? resampleHighQuality (*mono, fileRate, sr) : *mono);
         auto level = std::make_shared<std::vector<float>>();
         auto thr = std::make_shared<std::vector<float>>();
         float refDb = -150.0f;
         SpectralTemplate tmpl;
         auto found = std::make_shared<std::vector<Trigger>> (analyseTake (audio->data(), (int64_t) audio->size(), sr, rs.detector,
                                                                          &refDb, &tmpl, level.get(), thr.get(), kEnvBin));
-        juce::MessageManager::callAsync ([weak, audio, level, thr, found, name, onDone]
+        for (auto& t : *found) t.position += origin;
+        juce::MessageManager::callAsync ([weak, audio, origin, level, thr, found, key, name, initial, onDone, refDb]
         {
             auto* self = weak.get();
             if (self == nullptr) return;
-            self->suspendProcessing (true);
+            self->analysing.store (false);
+            if (self->offlineAudio != audio) return;   // superseded (cleared or replaced meanwhile)
+            self->analysedKey = key;
+            if (refDb > -140.0f) self->offlineRefDb = refDb;
+
             auto& cap = self->capture;
             const auto len = (int64_t) audio->size();
-            if (cap.capacity < len)
+            if (initial)
             {
-                cap.capacity = len;
-                cap.data[0].assign ((size_t) len, 0.0f);
-                self->envLevel.assign ((size_t) (len / kEnvBin + 1), -180.0f);
-                self->envThreshold.assign ((size_t) (len / kEnvBin + 1), -180.0f);
-                self->beatMap.assign ((size_t) (len / kBeatBin + 2), std::numeric_limits<double>::quiet_NaN());
+                self->suspendProcessing (true);
+                if (cap.capacity < len)
+                {
+                    cap.capacity = len;
+                    cap.data[0].assign ((size_t) len, 0.0f);
+                    self->envLevel.assign ((size_t) (len / kEnvBin + 1), -180.0f);
+                    self->envThreshold.assign ((size_t) (len / kEnvBin + 1), -180.0f);
+                    self->beatMap.assign ((size_t) (len / kBeatBin + 2), std::numeric_limits<double>::quiet_NaN());
+                }
+                if (origin != cap.origin.load())
+                    std::fill (self->beatMap.begin(), self->beatMap.end(), std::numeric_limits<double>::quiet_NaN());
+                std::copy (audio->begin(), audio->end(), cap.data[0].begin());
+                cap.origin.store (origin);
+                cap.length.store (len);
+                self->suspendProcessing (false);
             }
-            std::copy (audio->begin(), audio->end(), cap.data[0].begin());
-            std::fill (self->beatMap.begin(), self->beatMap.end(), std::numeric_limits<double>::quiet_NaN());
+            std::fill (self->envLevel.begin(), self->envLevel.end(), -180.0f);
+            std::fill (self->envThreshold.begin(), self->envThreshold.end(), -180.0f);
             std::copy (level->begin(), level->begin() + (long) std::min (level->size(), self->envLevel.size()), self->envLevel.begin());
             std::copy (thr->begin(), thr->begin() + (long) std::min (thr->size(), self->envThreshold.size()), self->envThreshold.begin());
-            cap.origin.store (0);           // the imported file starts at the start of the song
-            cap.length.store (len);
-            self->suspendProcessing (false);
-            self->commitTriggerEdit (*found, "Import audio", false);
-            self->setFinalized (true);      // play back exactly what was found; nothing is re-detected
-            self->analysing.store (false);
-            if (onDone) onDone ("Imported " + name + ": " + juce::String ((int) found->size()) + " notes (finalized).");
+
+            juce::String msg;
+            if (initial)
+            {
+                self->commitTriggerEdit (*found, "Analyze", false);
+                self->setFinalized (true);   // play back exactly these notes; settings changes re-analyse them
+                msg = "Analysed " + name + ": " + juce::String ((int) found->size()) + " notes.";
+            }
+            else
+            {
+                // keep what the user edited by hand; replace the rest with the new detection
+                std::vector<Trigger> next;
+                const auto keepOut = (int64_t) (0.004 * self->currentRate);
+                for (const auto& t : self->triggers.getAll()) if (t.locked) next.push_back (t);
+                const size_t locked = next.size();
+                for (const auto& t : *found)
+                {
+                    bool clash = false;
+                    for (size_t i = 0; i < locked && ! clash; ++i) clash = std::abs (next[i].position - t.position) < keepOut;
+                    if (! clash) next.push_back (t);
+                }
+                std::sort (next.begin(), next.end(), [] (const Trigger& a, const Trigger& b) { return a.position < b.position; });
+                self->commitTriggerEdit (std::move (next), "Re-analyse", false);
+                msg = "Re-analysed with the new settings: " + juce::String ((int) self->triggers.size()) + " notes.";
+            }
+            if (onDone) onDone (msg);
         });
     });
+}
+
+bool ThrumaProcessor::locateTo (int64_t pos)
+{
+    pos = std::max<int64_t> (0, pos);
+    if (offlineSource == OfflineSource::File)
+    {
+        previewPos.store (pos);
+        playhead.store (pos);
+        return true;
+    }
+    if (hostBridge.locate (pos))
+    {
+        playhead.store (pos);
+        return true;
+    }
+    return false;
+}
+
+void ThrumaProcessor::togglePlay()
+{
+    if (offlineSource == OfflineSource::File)
+    {
+        if (previewPlaying.load()) { previewPlaying.store (false); return; }
+        const auto origin = std::max<int64_t> (0, capture.origin.load());
+        const auto end = origin + capture.length.load();
+        if (previewPos.load() < origin || previewPos.load() >= end) previewPos.store (origin);
+        hostBridge.keepAwake();
+        previewPlaying.store (true);
+        return;
+    }
+    if (hostBridge.isHostPlaying()) hostBridge.stop();
+    else hostBridge.play();
+}
+
+bool ThrumaProcessor::loadMidiFileData (const juce::MemoryBlock& data, const juce::String& name, juce::String& message)
+{
+    juce::MemoryInputStream in (data, false);
+    juce::MidiFile mf;
+    if (! mf.readFrom (in)) { message = "Could not read " + name + " as a MIDI file."; return false; }
+    const short tf = mf.getTimeFormat();
+    if (tf <= 0) mf.convertTimestampTicksToSeconds();   // SMPTE timing: place by time at the current tempo
+    const double bpm = lastBpm.load();
+    auto seq = std::make_unique<MidiSequence>();
+    for (int tr = 0; tr < mf.getNumTracks(); ++tr)
+        for (const auto* e : *mf.getTrack (tr))
+            if (e->message.isNoteOn() && e->message.getVelocity() > 0)
+            {
+                const double t = e->message.getTimeStamp();
+                seq->notes.push_back ({ tf > 0 ? t / (double) tf : t * bpm / 60.0, e->message.getNoteNumber(), (int) e->message.getVelocity() });
+            }
+    std::stable_sort (seq->notes.begin(), seq->notes.end(), [] (const MidiBeatNote& a, const MidiBeatNote& b) { return a.beat < b.beat; });
+    if (seq->notes.empty()) { message = name + " has no notes."; return false; }
+    const auto count = (int) seq->notes.size();
+    midiSeqPublisher.publish (std::move (seq));
+    midiFileData = data;
+    midiFileName = name;
+    message = "Loaded " + name + ": " + juce::String (count) + " notes play the kit with the song (from bar 1).";
+    return true;
+}
+
+bool ThrumaProcessor::importMidiFile (const juce::File& file, juce::String& message)
+{
+    juce::MemoryBlock data;
+    if (! file.loadFileAsData (data)) { message = "Could not open " + file.getFileName(); return false; }
+    return loadMidiFileData (data, file.getFileName(), message);
+}
+
+void ThrumaProcessor::clearMidiFile()
+{
+    if (midiFileName.isEmpty() && midiSeqPublisher.getLatest() == nullptr) return;
+    midiSeqPublisher.publish (std::make_unique<MidiSequence>());
+    midiFileData.reset();
+    midiFileName = {};
+}
+
+int ThrumaProcessor::getMidiFileNoteCount() const
+{
+    const auto* sq = midiSeqPublisher.getLatest();
+    return sq != nullptr ? (int) sq->notes.size() : 0;
 }
 
 void ThrumaProcessor::previewSample (const juce::File& file)
@@ -1028,6 +1303,14 @@ void ThrumaProcessor::getStateInformation (juce::MemoryBlock& destData)
         root.appendChild (ov, nullptr);
     }
 
+    if (midiFileData.getSize() > 0)
+    {
+        juce::ValueTree mf ("MIDIFILE");
+        mf.setProperty ("name", midiFileName, nullptr);
+        mf.setProperty ("data", midiFileData.toBase64Encoding(), nullptr);
+        root.appendChild (mf, nullptr);
+    }
+
     juce::ValueTree ui ("UI");
     ui.setProperty ("tab", uiTab, nullptr);
     root.appendChild (ui, nullptr);
@@ -1097,6 +1380,16 @@ void ThrumaProcessor::setStateInformation (const void* data, int sizeInBytes)
         storedOverview = base64ToFloats (ov.getProperty ("data").toString());
         storedOverviewOrigin = (juce::int64) ov.getProperty ("origin");
     }
+
+    if (auto mf = root.getChildWithName ("MIDIFILE"); mf.isValid())
+    {
+        juce::MemoryBlock d;
+        juce::String msg;
+        if (d.fromBase64Encoding (mf.getProperty ("data").toString()))
+            loadMidiFileData (d, mf.getProperty ("name").toString(), msg);
+    }
+    else
+        clearMidiFile();
 
     if (auto ui = root.getChildWithName ("UI"); ui.isValid())
         uiTab = (int) ui.getProperty ("tab");

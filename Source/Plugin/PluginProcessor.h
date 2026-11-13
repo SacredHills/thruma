@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Debleed.h"
+#include "HostBridge.h"
 #include "KitManager.h"
 #include "LinkHub.h"
 #include "Parameters.h"
@@ -113,6 +114,34 @@ public:
 
     void previewSample (const juce::File& file);
 
+    // --- offline analysis: the whole track (from the host) or an imported file ---
+    enum class OfflineSource { None, HostTrack, Heard, File };
+    OfflineSource getOfflineSource() const { return offlineSource; }
+    juce::String getOfflineName() const { return offlineName; }
+    /** Analyze: the whole track straight from the host where the host allows it (RAVENYR), otherwise what has
+        been heard so far. Result is finalized; changing detection settings re-analyses it automatically. */
+    void analyseTrack (std::function<void (const juce::String& message)> onDone);
+    bool canReadHostTrack() const { return hostBridge.isAvailable() && hostBridge.knowsTrack(); }
+    bool canControlHostTransport() const { return hostBridge.isAvailable(); }
+    /** Message from the latest automatic re-analysis (empty if none); the counter changes with each one. */
+    juce::String getOfflineMessage() const { return offlineMessage; }
+    int getOfflineMessageCount() const { return offlineMessageCount; }
+
+    /** Ruler click: play from this timeline position (in-plugin preview of imported audio, or the host's
+        transport where the host allows it). False if neither is possible. */
+    bool locateTo (int64_t timelinePos);
+    /** Play / stop: the imported audio inside the plugin, otherwise the host transport (where allowed). */
+    bool canTogglePlay() const { return offlineSource == OfflineSource::File || canControlHostTransport(); }
+    void togglePlay();
+    bool isPlayingNow() const { return previewPlaying.load() || (canControlHostTransport() && hostBridge.isHostPlaying()); }
+    bool isPreviewPlaying() const { return previewPlaying.load(); }
+
+    // --- MIDI file: plays the kit in time with the host, no analysis ---
+    bool importMidiFile (const juce::File& file, juce::String& message);
+    void clearMidiFile();
+    juce::String getMidiFileName() const { return midiFileName; }
+    int getMidiFileNoteCount() const;
+
     /** Detection level / threshold history on the host timeline (one value per kEnvBin samples). */
     static constexpr int kEnvBin = DetectionScope::kDecim;
     const std::vector<float>& getEnvelopeLevel() const { return envLevel; }
@@ -120,7 +149,7 @@ public:
     float getCurrentThresholdDb() const;
     /** Host-timeline position = scope (engine) position + this offset. */
     int64_t getScopeToTimelineOffset() const { return scopeOffset.load (std::memory_order_relaxed); }
-    float getCurrentReferenceDb() const { return replace.getScope().referenceDb.load(); }
+    float getCurrentReferenceDb() const;
 
     void updateTrackProperties (const TrackProperties& properties) override;
     juce::String getTrackName() const { return trackName; }
@@ -245,6 +274,28 @@ private:
     bool blockPlaying = false, hostTimelineSeen = false;
     int uiTab = 1;   // REPLACE
     std::unique_ptr<juce::ThreadPool> workers;
+
+    HostBridge hostBridge;
+    OfflineSource offlineSource = OfflineSource::None;
+    juce::String offlineName, offlineMessage, analysedKey;
+    int offlineMessageCount = 0;
+    std::shared_ptr<const std::vector<float>> offlineAudio;   // at currentRate, starting at offlineOrigin
+    int64_t offlineOrigin = 0;
+    float offlineRefDb = -20.0f;
+    double reanalyseAt = 0.0;
+    void installOfflineAudio (std::shared_ptr<const std::vector<float>> audio, int64_t origin, const juce::String& name,
+                              OfflineSource src, std::function<void (const juce::String&)> onDone);
+    void runOfflineAnalysis (bool initial, std::function<void (const juce::String&)> onDone);
+    void dropOfflineAudio();
+    juce::String detectionSettingsKey() const;
+    std::atomic<bool> previewPlaying { false };
+    std::atomic<int64_t> previewPos { 0 };
+
+    struct MidiSequence { std::vector<MidiBeatNote> notes; };   // sorted by beat
+    RcuPublisher<MidiSequence> midiSeqPublisher;
+    juce::MemoryBlock midiFileData;
+    juce::String midiFileName;
+    bool loadMidiFileData (const juce::MemoryBlock& data, const juce::String& name, juce::String& message);
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (ThrumaProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThrumaProcessor)

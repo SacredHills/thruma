@@ -21,7 +21,13 @@ Thruma detects the hits on a drum mic and replaces or layers them with your own 
 - Hits are detected live from the track Thruma is on. There is no recording or analysis step, and detection learns in the background.
 - Transient detection with a profile for each instrument. It catches ghost notes, flams, drags and fast double bass, places onsets to within a fraction of a millisecond, and rejects bleed by its spectral fingerprint.
 - Samples: velocity layers, round-robin or random selection, velocity response, blend.
-- MIDI: drag the notes straight into your DAW, save a `.mid` file, send hits on the MIDI output, and play the kit from MIDI input.
+- **Analyze** the whole song at once (RAVENYR reads the track for Thruma; elsewhere, what has been played), or **Import Audio** and play it inside Thruma. Results stay adjustable: change Sensitivity and the song is re-analysed, keeping hand edits. **Finalize** freezes the notes.
+- Click the time ruler to play from there (imported audio, or RAVENYR's transport).
+- MIDI: drag the notes straight into your DAW, save a `.mid` file (placed on the DAW's beat grid), send hits on the MIDI output, and play the kit from MIDI input.
+
+**Drum sample player**
+- Thruma is one VST3 instrument with an audio input: use it as an insert on a drum track, or on a MIDI track where MIDI clips play the kit.
+- Import a MIDI file into Thruma: it plays the kit in time with the song, no analysis.
 
 **Debleed** (spectral processing, not a gate)
 - Models the target drum per frequency bin: its spectrum is captured at each hit and then decays at the drum's learned rate. Everything this model explains is kept. Bleed is estimated from a reference mic when one is available, otherwise from energy the model cannot explain (blind mode).

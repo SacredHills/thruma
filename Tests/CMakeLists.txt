@@ -38,4 +38,5 @@ if(THRUMA_BUILD_PLUGIN AND THRUMA_BUILD_SCREENSHOT)
     target_link_libraries(ThrumaLogDebug PRIVATE Thruma thruma_core)
     target_include_directories(ThrumaLogDebug PRIVATE $<TARGET_PROPERTY:Thruma,INCLUDE_DIRECTORIES>)
     target_compile_definitions(ThrumaLogDebug PRIVATE $<TARGET_PROPERTY:Thruma,COMPILE_DEFINITIONS>)
+    set_target_properties(ThrumaLogDebug PROPERTIES ENABLE_EXPORTS ON)   # exports a fake host API for HostBridge
 endif()

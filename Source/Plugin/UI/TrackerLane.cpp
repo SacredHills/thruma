@@ -100,16 +100,21 @@ void TrackerLane::syncZoomSlider()
     zoom.setValue (juce::jlimit (0.0, 1.0, std::log (spp / fit) / std::log (2.0 / fit)), juce::dontSendNotification);
 }
 
+static bool isMidiFile (const juce::File& f) { return f.hasFileExtension ("mid;midi;smf"); }
+
 bool TrackerLane::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    for (auto& f : files) if (KitManager::isAudioFile (juce::File (f))) return true;
+    for (auto& f : files) if (KitManager::isAudioFile (juce::File (f)) || isMidiFile (juce::File (f))) return true;
     return false;
 }
 
 void TrackerLane::filesDropped (const juce::StringArray& files, int, int)
 {
     for (auto& f : files)
+    {
+        if (isMidiFile (juce::File (f))) { if (onMidiFileDropped) onMidiFileDropped (juce::File (f)); return; }
         if (KitManager::isAudioFile (juce::File (f))) { if (onAudioFileDropped) onAudioFileDropped (juce::File (f)); return; }
+    }
 }
 
 void TrackerLane::updateScrollBar()
@@ -272,10 +277,11 @@ void TrackerLane::paint (juce::Graphics& g)
         g.setColour (colours::accent.withAlpha (0.15f));
         g.fillRect (rubber);
     }
-    if (proc.isTransportPlaying())
+    if (proc.isTransportPlaying() || proc.getOfflineSource() != ThrumaProcessor::OfflineSource::None || proc.canControlHostTransport())
     {
-        g.setColour (colours::record);
+        g.setColour (proc.isTransportPlaying() ? colours::record : colours::record.withAlpha (0.45f));
         const float x = posToX ((double) proc.getPlayheadPosition());
+        g.fillPath ([x] { juce::Path p; p.addTriangle (x - 5.0f, 0.0f, x + 5.0f, 0.0f, x, 8.0f); return p; }());
         g.drawVerticalLine ((int) x, (float) audio.getY(), (float) midi.getBottom());
     }
 
@@ -296,9 +302,10 @@ void TrackerLane::paint (juce::Graphics& g)
     if (origin < 0 && t.empty())
     {
         g.setFont (juce::FontOptions (14.0f));
-        g.drawFittedText ("Press play in your DAW: the drum's hits appear here as MIDI notes in real time.\n"
-                          "Or drop an audio file of the drum track here (Import Audio) to analyse it offline.",
-                          audio.reduced (20), juce::Justification::centred, 2);
+        g.drawFittedText (juce::String (proc.canReadHostTrack() ? "Press Analyze to track the whole song at once, or press play: hits appear here as MIDI notes.\n"
+                                                                : "Press play in your DAW: the drum's hits appear here as MIDI notes in real time.\n")
+                          + "Or drop an audio file of the drum track here (Import Audio), or a MIDI file to play the kit.",
+                          audio.reduced (20), juce::Justification::centred, 3);
     }
     g.setColour (colours::outline);
     g.drawRect (getLocalBounds());
@@ -333,6 +340,7 @@ void TrackerLane::setThresholdDb (float db)
 
 void TrackerLane::mouseMove (const juce::MouseEvent& e)
 {
+    if (e.position.y < (float) kRulerH) { setMouseCursor (juce::MouseCursor::PointingHandCursor); return; }
     bool top = false;
     const bool overThr = audioArea().contains (e.getPosition()) && std::abs (e.position.y - dbToY (proc.getCurrentThresholdDb())) < 7.0f;
     const int bar = midiArea().contains (e.getPosition()) ? hitTestBar (e.position, top) : -1;
@@ -345,6 +353,14 @@ void TrackerLane::mouseDown (const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
     lastInteractionMs = juce::Time::getMillisecondCounter();
+    if (e.position.y < (float) kRulerH)
+    {
+        // ruler: play from here
+        if (! proc.locateTo ((int64_t) std::max (0.0, xToPos (e.position.x))) && onMessage)
+            onMessage ("This DAW does not let plugins move its play position - click in the DAW's timeline instead.");
+        repaint();
+        return;
+    }
     if (audioArea().contains (e.getPosition()) && std::abs (e.position.y - dbToY (proc.getCurrentThresholdDb())) < 7.0f)
     {
         drag = Drag::Threshold;

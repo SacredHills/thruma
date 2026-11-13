@@ -12,20 +12,21 @@ juce_add_plugin(Thruma
     PLUGIN_CODE                 Thrm
     FORMATS                     ${THRUMA_FORMATS}
     VERSION                     ${PROJECT_VERSION}
-    IS_SYNTH                    FALSE
+    IS_SYNTH                    TRUE
     NEEDS_MIDI_INPUT            TRUE
     NEEDS_MIDI_OUTPUT           TRUE
     IS_MIDI_EFFECT              FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD     FALSE
-    VST3_CATEGORIES             Fx Drum Tools
+    VST3_CATEGORIES             Instrument Drum Sampler
     VST3_AUTO_MANIFEST          FALSE
-    DESCRIPTION                 "Drum replacement and debleed")
+    DESCRIPTION                 "Drum replacement, debleed and drum sampler")
 
 target_sources(Thruma PRIVATE
     Parameters.cpp
     KitManager.cpp
     PluginProcessor.cpp
+    HostBridge.cpp
     PluginEditor.cpp
     UI/LookAndFeel.cpp
     UI/Widgets.cpp

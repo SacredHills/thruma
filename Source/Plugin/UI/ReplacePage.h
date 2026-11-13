@@ -41,8 +41,11 @@ private:
     TrackerLane lane;
     ParamSlider sensitivity, velocity, blend, output;
     MidiDragSource dragMidi;
-    juce::TextButton saveBtn { "Save MIDI..." }, clearBtn { "Clear" }, finalizeBtn { "Finalize" }, importBtn { "Import Audio..." };
+    juce::TextButton saveBtn { "Save MIDI..." }, clearBtn { "Clear" }, finalizeBtn { "Finalize" }, importBtn { "Import Audio..." },
+                     analyzeBtn { "Analyze" }, importMidiBtn { "Import MIDI..." }, playBtn { "Play" };
     void importFile (const juce::File& f);
+    void importMidi (const juce::File& f);
+    int lastOfflineMessageCount = 0;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String message;
     juce::uint32 messageTime = 0;

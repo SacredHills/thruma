@@ -47,7 +47,8 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
     addAndMakeVisible (trackPanel);
     addAndMakeVisible (controlPanel);
     for (juce::Component* c : std::initializer_list<juce::Component*> { &instrument, &sample, &hits, &info, &lane, &sensitivity, &velocity,
-                                                                        &blend, &output, &dragMidi, &saveBtn, &clearBtn, &finalizeBtn, &importBtn })
+                                                                        &blend, &output, &dragMidi, &saveBtn, &clearBtn, &finalizeBtn, &importBtn,
+                                                                        &analyzeBtn, &importMidiBtn, &playBtn })
         addAndMakeVisible (c);
     trackPanel.toBack();
     controlPanel.toBack();
@@ -78,6 +79,38 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
         });
     };
     lane.onAudioFileDropped = [this] (const juce::File& f) { importFile (f); };
+    lane.onMidiFileDropped = [this] (const juce::File& f) { importMidi (f); };
+    lane.onMessage = [this] (const juce::String& m) { showMessage (m); };
+
+    analyzeBtn.setTooltip ("Track the whole song at once, without playing it (where your DAW lets plugins read the track; "
+                           "otherwise analyses what has been played so far). The result is finalized; changing Sensitivity "
+                           "or the threshold re-analyses it, keeping notes you edited by hand.");
+    analyzeBtn.onClick = [this]
+    {
+        showMessage ("Analysing...");
+        juce::Component::SafePointer<ReplacePage> safe (this);
+        proc.analyseTrack ([safe] (const juce::String& m)
+        {
+            if (safe == nullptr) return;
+            safe->showMessage (m);
+            safe->lane.zoomToFit();
+        });
+    };
+    importMidiBtn.setTooltip ("Load a MIDI file: its notes play the kit in time with your song (no analysis). "
+                              "Or put Thruma on a MIDI/instrument track and play it from MIDI clips.");
+    importMidiBtn.onClick = [this]
+    {
+        juce::Component::SafePointer<ReplacePage> safe (this);
+        chooser = std::make_unique<juce::FileChooser> ("Import MIDI file", juce::File::getSpecialLocation (juce::File::userMusicDirectory), "*.mid;*.midi");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                              [safe] (const juce::FileChooser& fc)
+        {
+            if (safe != nullptr && fc.getResult() != juce::File()) safe->importMidi (fc.getResult());
+        });
+    };
+    playBtn.setTooltip ("Play / stop. Imported audio plays inside Thruma (click the time ruler to choose where); "
+                        "in DAWs that allow it, this runs the DAW's transport.");
+    playBtn.onClick = [this] { proc.togglePlay(); timerCallback(); };
     startTimerHz (6);
     timerCallback();
 }
@@ -103,24 +136,25 @@ void ReplacePage::resized()
     sample.setBounds (t.removeFromTop (46));
     t.removeFromTop (16);
     hits.setBounds (t.removeFromTop (30));
+    saveBtn.setBounds (t.removeFromBottom (30));
+    t.removeFromBottom (6);
+    dragMidi.setBounds (t.removeFromBottom (30));
+    t.removeFromBottom (8);
     info.setBounds (t);
     lane.setBounds (r);
 
     controlPanel.setBounds (bottom);
     auto c = controlPanel.getContentBounds();
-    auto buttons = c.removeFromRight (300);
+    auto buttons = c.removeFromRight (360);
     c.removeFromRight (20);
-    auto row1 = buttons.removeFromTop (34);
-    finalizeBtn.setBounds (row1.removeFromLeft (row1.getWidth() / 2 - 3));
-    row1.removeFromLeft (6);
-    importBtn.setBounds (row1);
+    auto place = [] (juce::Rectangle<int> row, std::initializer_list<juce::Component*> cs)
+    {
+        const int w = (row.getWidth() - 6 * ((int) cs.size() - 1)) / (int) cs.size();
+        for (auto* comp : cs) { comp->setBounds (row.removeFromLeft (w)); row.removeFromLeft (6); }
+    };
+    place (buttons.removeFromTop (34), { &analyzeBtn, &importBtn, &importMidiBtn });
     buttons.removeFromTop (10);
-    auto row2 = buttons.removeFromTop (34);
-    dragMidi.setBounds (row2.removeFromLeft (110));
-    row2.removeFromLeft (6);
-    saveBtn.setBounds (row2.removeFromLeft (row2.getWidth() - 70));
-    row2.removeFromLeft (6);
-    clearBtn.setBounds (row2);
+    place (buttons.removeFromTop (34), { &playBtn, &finalizeBtn, &clearBtn });
     const int colW = (c.getWidth() - 24) / 2;
     auto col1 = c.removeFromLeft (colW);
     c.removeFromLeft (24);
@@ -136,8 +170,24 @@ void ReplacePage::timerCallback()
     int files = 0;
     for (auto& l : slot.layers) files += l.files.size();
 
+    if (proc.getOfflineMessageCount() != lastOfflineMessageCount)
+    {
+        lastOfflineMessageCount = proc.getOfflineMessageCount();
+        showMessage (proc.getOfflineMessage());
+        return;
+    }
+    playBtn.setEnabled (proc.canTogglePlay());
+    const auto playText = proc.isPlayingNow() ? "Stop" : "Play";
+    if (playBtn.getButtonText() != playText) playBtn.setButtonText (playText);
+    analyzeBtn.setEnabled (! proc.isAnalysing());
+
     juce::String s;
-    if (src == TriggerSource::Edited) s << "Finalized";
+    using OS = ThrumaProcessor::OfflineSource;
+    const auto off = proc.getOfflineSource();
+    if (off == OS::File) s << "Imported audio: " << proc.getOfflineName() << (proc.isPreviewPlaying() ? " (playing in Thruma)" : "");
+    else if (off == OS::HostTrack) s << "Analysed the whole track";
+    else if (off == OS::Heard) s << "Analysed what was played";
+    else if (src == TriggerSource::Edited) s << "Finalized";
     else switch (proc.getTransportMode())
     {
         case 1:  s << "Listening (following your DAW)"; break;
@@ -147,8 +197,14 @@ void ReplacePage::timerCallback()
     s << "\n\n";
     if (finalizeBtn.getToggleState() != (src == TriggerSource::Edited))
         finalizeBtn.setToggleState (src == TriggerSource::Edited, juce::dontSendNotification);
-    s << (src == TriggerSource::Edited ? "FINALIZED: these notes play back exactly as shown. Click Finalize again to detect live."
-                                       : "Live: hits are detected as the track plays. Edit notes, then Finalize to keep them.") << "\n\n";
+    if (off != OS::None)
+        s << "Change Sensitivity or drag the threshold: the notes are re-analysed (hand-edited notes stay). "
+             "Click Finalize to go back to live detection.\n\n";
+    else
+        s << (src == TriggerSource::Edited ? "FINALIZED: these notes play back exactly as shown. Click Finalize again to detect live."
+                                           : "Live: hits are detected as the track plays. Edit notes, then Finalize to keep them.") << "\n\n";
+    if (proc.getMidiFileName().isNotEmpty())
+        s << "MIDI file: " << proc.getMidiFileName() << " (" << proc.getMidiFileNoteCount() << " notes) plays the kit with the song.\n\n";
     if (files == 0) s << "No samples for " << getInstrumentName ((Instrument) currentSlot()) << " yet: drop WAV files here or use SAMPLES. "
                          "The original drum plays until then.";
     else s << files << " samples, " << (int) slot.layers.size() << " velocity layers";
@@ -166,6 +222,13 @@ void ReplacePage::importFile (const juce::File& f)
         safe->showMessage (m);
         safe->lane.zoomToFit();
     });
+}
+
+void ReplacePage::importMidi (const juce::File& f)
+{
+    juce::String m;
+    proc.importMidiFile (f, m);
+    showMessage (m);
 }
 
 void ReplacePage::saveMidi()

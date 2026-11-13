@@ -6,6 +6,14 @@ The header shows the plugin's latency (your DAW compensates it automatically), a
 
 ---
 
+## Where to put Thruma
+
+Thruma is one plugin (a VST3 *instrument* with an audio input) that you can use two ways:
+- **On a drum audio track** (as an insert): it tracks the drum, replaces or layers it, and makes MIDI.
+- **On a MIDI / instrument track**: it is a drum sample player. MIDI clips on the track play the kit (SAMPLES page). You can also import a MIDI file into Thruma itself (see below).
+
+Some DAWs only list instruments on MIDI tracks; in those, route the drum track into Thruma's input or sidechain. RAVENYR lists Thruma as an insert on audio tracks too.
+
 ## REPLACE
 
 The Replace page works like a tracker. It has a track lane and a few controls.
@@ -26,6 +34,7 @@ Editing in the MIDI lane:
 | Select | Click; Shift-click to add; drag on empty space to box-select; Ctrl/Cmd+A selects all |
 | Delete | Delete / Backspace |
 | Undo / Redo | Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z |
+| Play from here | **Click the time ruler** at the top. With imported audio this sets where Thruma's own playback starts; in RAVENYR it moves the DAW's play position. Other DAWs don't let plugins move their playhead |
 | Zoom / scroll | **ZOOM slider** (bottom right): all the way left shows the whole song. Mouse wheel zooms too; Shift+wheel or the scrollbar scrolls; **F** shows the whole song |
 
 The lane follows the playhead while the song plays.
@@ -35,7 +44,11 @@ The lane follows the playhead while the song plays.
 - **Finalize:** press it when you are happy with the notes. They are frozen: playback plays exactly these notes and nothing is re-detected. Press it again to go back to live detection.
 - **Clear** removes all notes and returns to live detection.
 
-**Import Audio… (non-live mode):** choose an audio file of the drum track (WAV, AIFF, FLAC, …, up to 10 minutes), or drop it onto the lane. Thruma analyses the whole file at once, shows its waveform and notes, and finalizes the result. Start the file at the song start so the notes line up with your DAW.
+**Analyze (no need to play the whole song):** in RAVENYR, Analyze reads the track's whole audio straight from the DAW and tracks it in a few seconds. In other DAWs, plugins can't read the track, so Analyze analyses everything played so far (or use Import Audio). The result is finalized, and it stays adjustable: change **Sensitivity** or drag the threshold and the whole song is re-analysed (notes you edited by hand are kept).
+
+**Import Audio… (non-live mode):** choose an audio file of the drum track (WAV, AIFF, FLAC, …, up to 10 minutes), or drop it onto the lane. Thruma analyses the whole file at once, shows its waveform and notes, and finalizes the result. Start the file at the song start so the notes line up with your DAW. Press **Play** to hear the imported track with its replacement inside Thruma (no DAW playback needed), click the ruler to jump, and adjust Sensitivity, Velocity, Blend and Output while it plays.
+
+**Import MIDI… (sample player):** load a `.mid` file (or drop it on the lane). Its notes play the kit in time with your DAW's tempo from bar 1, through the kit's MIDI note mapping (SAMPLES page). Nothing is analysed. **Clear** removes it.
 
 ### Track panel
 | Control | What it does |
@@ -52,11 +65,14 @@ The panel also shows the note count, whether Thruma is listening, and how many s
 | **Velocity** | 0 % = every hit at full level, 100 % = follow the played dynamics |
 | **Blend** | 0 % = original drum, 100 % = replacement sample |
 | **Output** | Output level |
-| **Finalize** | Freezes the current notes (see above) |
+| **Analyze** | Tracks the whole song at once (see above) |
 | **Import Audio…** | Analyses an audio file instead of listening live |
+| **Import MIDI…** | Plays a MIDI file through the kit, in time with the song |
+| **Play** | Plays imported audio inside Thruma; in RAVENYR it starts / stops the DAW |
+| **Finalize** | Freezes the current notes (see above) |
 | **Drag MIDI** | Drag this into your DAW to drop the notes as a MIDI clip. Notes are placed on your DAW's own beat grid (tempo changes included), measured from the song start, so drop the clip at bar 1 to line it up |
 | **Save MIDI…** | Saves the notes as a `.mid` file, timed the same way |
-| **Clear** | Removes all notes and returns to live detection |
+| **Clear** | Removes all notes, the imported audio and MIDI file, and returns to live detection |
 
 Thruma also learns in the background while the song plays: the level of your real hits and the drum's sound. Detection gets more consistent after the first few seconds.
 
@@ -107,6 +123,7 @@ The display shows the current reduction per frequency band.
 ---
 
 ## MIDI
+- On a MIDI / instrument track, the track's MIDI clips play the kit (Thruma is a drum sample player there).
 - Thruma's MIDI output sends every hit as a note on channel 10. Route it to a drum instrument in your DAW.
 - MIDI notes sent *into* Thruma play the kit sound with that MIDI note.
 

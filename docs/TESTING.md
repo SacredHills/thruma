@@ -62,6 +62,8 @@ The host validator instantiates the plugin through JUCE's VST3 hosting and check
 - a **state round-trip into a new instance**;
 - live hit logging while the transport plays (48 of 48 hits), replay without duplicates, hosts without a play flag or position;
 - **Finalize**: notes stay unchanged while another section plays;
+
+`ThrumaLogDebug` (dev harness, `-DTHRUMA_BUILD_SCREENSHOT=ON`) drives the processor directly and checks MIDI-file playback on the host beat grid (≤ 1 sample after latency compensation), MIDI with no audio input, in-plugin preview of imported audio with a ruler locate, automatic re-analysis that keeps hand edits, and the RAVENYR host extension (whole-track Analyze, locate, play) against a fake host API;
 - editor creation.
 
 CI runs it on all three operating systems, together with **pluginval** at strictness 5.

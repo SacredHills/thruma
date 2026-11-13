@@ -31,6 +31,8 @@ public:
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int, int) override;
     std::function<void (const juce::File&)> onAudioFileDropped;
+    std::function<void (const juce::File&)> onMidiFileDropped;
+    std::function<void (const juce::String&)> onMessage;
 
 private:
     void timerCallback() override;

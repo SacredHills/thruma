@@ -1,5 +1,7 @@
 # Thruma
 
+[![Build, test & package](https://github.com/SacredHills/thruma/actions/workflows/build.yml/badge.svg)](https://github.com/SacredHills/thruma/actions/workflows/build.yml)
+
 **Drum replacement and debleed in one VST3 plugin** for Windows, macOS and Linux.
 
 Thruma detects the hits on a drum mic and replaces or layers them with your own WAV samples. It also reduces bleed from the rest of the kit without gating away the drum's attack, decay or ghost notes. Most of the DSP runs on its own; the interface shows only a few controls.

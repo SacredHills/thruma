@@ -68,10 +68,11 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
     importBtn.setTooltip ("Load an audio file of this drum track (exported from the start of the song) and detect its hits offline.");
     importBtn.onClick = [this]
     {
+        juce::Component::SafePointer<ReplacePage> safe (this);
         chooser = std::make_unique<juce::FileChooser> ("Import drum track", juce::File::getSpecialLocation (juce::File::userMusicDirectory),
                                                        "*.wav;*.aif;*.aiff;*.flac");
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                              [safe = juce::Component::SafePointer<ReplacePage> (this)] (const juce::FileChooser& fc)
+                              [safe] (const juce::FileChooser& fc)
         {
             if (safe != nullptr && fc.getResult() != juce::File()) safe->importFile (fc.getResult());
         });

@@ -31,6 +31,8 @@ Add `<name>.<instrument>.wav` plus `<name>.<instrument>.txt` (one onset time in 
 | Detection: kick, 16th double bass | P/R/F1, timing | 1.00 / 1.00, 0.00 ms |
 | Detection: tom mic with −10 dB snare bleed (Analyze) | P/R | 1.00 / 1.00 |
 | Detection: hi-hat / crash (overhead) | P/R | 0.88 / 1.00, 1.00 / 1.00 |
+| Detection: fast playing with hi-hat bleed | P/R at 83 / 62 / 47 / 37 ms spacing | snare 0.99 / 0.95 / 0.95 / 0.87 recall; kick 1.00 / 0.95 / 0.95 / 0.94; precision ≥ 0.95 |
+| Detection: loud bleed + long snare break | false hits in the break | ≤ 7 at default, 0 at 30 % sensitivity |
 | Velocity | correlation of velocity vs. played level | 0.96 |
 | Double hits / retrigger / no retrigger on a ringing hit | hit counts | ✓ |
 | Sample-rate consistency (44.1 / 96 kHz) | P/R/timing | ✓ |
@@ -58,6 +60,8 @@ The host validator instantiates the plugin through JUCE's VST3 hosting and check
 - mono layout, and stereo with a stereo sidechain;
 - random automation of every parameter;
 - a **state round-trip into a new instance**;
+- live hit logging while the transport plays (48 of 48 hits), replay without duplicates, hosts without a play flag or position;
+- **Finalize**: notes stay unchanged while another section plays;
 - editor creation.
 
 CI runs it on all three operating systems, together with **pluginval** at strictness 5.

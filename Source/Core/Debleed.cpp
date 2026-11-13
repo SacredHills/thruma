@@ -138,8 +138,9 @@ void DebleedProcessor::setSettings (const DebleedSettings& s) noexcept
 
     DetectorSettings ds;
     ds.instrument = settings.instrument;
-    ds.sensitivity = settings.sensitivity;
-    ds.ghostSensitivity = std::clamp (settings.sensitivity * 0.9f, 0.0f, 1.0f);
+    // debleed protects whatever this detector calls a hit, so it errs on the side of not mistaking bleed for hits
+    ds.sensitivity = settings.sensitivity * 0.8f;
+    ds.ghostSensitivity = std::clamp (settings.sensitivity * 0.7f, 0.0f, 1.0f);
     ds.doubleHits = true;
     ds.maxReportDelayMs = 10.0f;
     detector.setSettings (ds);

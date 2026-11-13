@@ -47,7 +47,7 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
     addAndMakeVisible (trackPanel);
     addAndMakeVisible (controlPanel);
     for (juce::Component* c : std::initializer_list<juce::Component*> { &instrument, &sample, &hits, &info, &lane, &sensitivity, &velocity,
-                                                                        &blend, &output, &dragMidi, &saveBtn, &clearBtn })
+                                                                        &blend, &output, &dragMidi, &saveBtn, &clearBtn, &finalizeBtn, &importBtn })
         addAndMakeVisible (c);
     trackPanel.toBack();
     controlPanel.toBack();
@@ -61,6 +61,22 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
     saveBtn.onClick = [this] { saveMidi(); };
     clearBtn.setTooltip ("Remove all notes and go back to live detection.");
     clearBtn.onClick = [this] { proc.clearAll(); };
+    finalizeBtn.setClickingTogglesState (true);
+    finalizeBtn.setTooltip ("Keep the current notes exactly as they are: playback uses them and nothing is re-detected. "
+                            "Click again to go back to live detection.");
+    finalizeBtn.onClick = [this] { proc.setFinalized (finalizeBtn.getToggleState()); timerCallback(); };
+    importBtn.setTooltip ("Load an audio file of this drum track (exported from the start of the song) and detect its hits offline.");
+    importBtn.onClick = [this]
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import drum track", juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+                                                       "*.wav;*.aif;*.aiff;*.flac");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                              [safe = juce::Component::SafePointer<ReplacePage> (this)] (const juce::FileChooser& fc)
+        {
+            if (safe != nullptr && fc.getResult() != juce::File()) safe->importFile (fc.getResult());
+        });
+    };
+    lane.onAudioFileDropped = [this] (const juce::File& f) { importFile (f); };
     startTimerHz (6);
     timerCallback();
 }
@@ -91,14 +107,19 @@ void ReplacePage::resized()
 
     controlPanel.setBounds (bottom);
     auto c = controlPanel.getContentBounds();
-    auto buttons = c.removeFromRight (150);
+    auto buttons = c.removeFromRight (300);
     c.removeFromRight (20);
-    dragMidi.setBounds (buttons.removeFromTop (34));
-    buttons.removeFromTop (8);
-    auto row = buttons.removeFromTop (30);
-    saveBtn.setBounds (row.removeFromLeft (row.getWidth() / 2 + 10));
-    row.removeFromLeft (6);
-    clearBtn.setBounds (row);
+    auto row1 = buttons.removeFromTop (34);
+    finalizeBtn.setBounds (row1.removeFromLeft (row1.getWidth() / 2 - 3));
+    row1.removeFromLeft (6);
+    importBtn.setBounds (row1);
+    buttons.removeFromTop (10);
+    auto row2 = buttons.removeFromTop (34);
+    dragMidi.setBounds (row2.removeFromLeft (110));
+    row2.removeFromLeft (6);
+    saveBtn.setBounds (row2.removeFromLeft (row2.getWidth() - 70));
+    row2.removeFromLeft (6);
+    clearBtn.setBounds (row2);
     const int colW = (c.getWidth() - 24) / 2;
     auto col1 = c.removeFromLeft (colW);
     c.removeFromLeft (24);
@@ -115,21 +136,35 @@ void ReplacePage::timerCallback()
     for (auto& l : slot.layers) files += l.files.size();
 
     juce::String s;
-    switch (proc.getTransportMode())
+    if (src == TriggerSource::Edited) s << "Finalized";
+    else switch (proc.getTransportMode())
     {
         case 1:  s << "Listening (following your DAW)"; break;
         case 2:  s << "Listening (your DAW sends no song position, using Thruma's clock)"; break;
         default: s << "Waiting for playback..."; break;
     }
     s << "\n\n";
-    s << (src == TriggerSource::Edited ? "Playing your edited notes.\nClear to return to live detection."
-                                       : "Live: hits are detected as the track plays.") << "\n\n";
+    if (finalizeBtn.getToggleState() != (src == TriggerSource::Edited))
+        finalizeBtn.setToggleState (src == TriggerSource::Edited, juce::dontSendNotification);
+    s << (src == TriggerSource::Edited ? "FINALIZED: these notes play back exactly as shown. Click Finalize again to detect live."
+                                       : "Live: hits are detected as the track plays. Edit notes, then Finalize to keep them.") << "\n\n";
     if (files == 0) s << "No samples for " << getInstrumentName ((Instrument) currentSlot()) << " yet: drop WAV files here or use SAMPLES. "
                          "The original drum plays until then.";
     else s << files << " samples, " << (int) slot.layers.size() << " velocity layers";
     if (message.isNotEmpty() && juce::Time::getMillisecondCounter() - messageTime < 6000)
         s = message + "\n\n" + s;
     info.setText (s, juce::dontSendNotification);
+}
+
+void ReplacePage::importFile (const juce::File& f)
+{
+    showMessage ("Analysing " + f.getFileName() + "...");
+    proc.importAudio (f, [safe = juce::Component::SafePointer<ReplacePage> (this)] (const juce::String& m)
+    {
+        if (safe == nullptr) return;
+        safe->showMessage (m);
+        safe->lane.zoomToFit();
+    });
 }
 
 void ReplacePage::saveMidi()

@@ -82,16 +82,25 @@ public:
 
     // listening (always on while the host plays) & editing
     void clearCapture();
-    void clearAll();   // triggers + recorded audio
+    void clearAll();   // triggers + recorded audio, back to live detection
+
+    /** Finalized: the current notes are kept and played back exactly; nothing is re-detected or re-recorded. */
+    bool isFinalized() const { return (int) apvts.getRawParameterValue (ids::repSource)->load() == (int) TriggerSource::Edited; }
+    void setFinalized (bool shouldBeFinalized);
+
+    /** Load an audio file of this drum track (starting at the song start), detect its hits and finalize them. */
+    void importAudio (const juce::File& file, std::function<void (const juce::String& message)> onDone);
     const CaptureBuffer& getCapture() const { return capture; }
     const std::vector<float>& getStoredOverview() const { return storedOverview; }   // min/max pairs per kOverviewBin
     int64_t getStoredOverviewOrigin() const { return storedOverviewOrigin; }
     static constexpr int kOverviewBin = 256;
 
     TriggerList& getTriggers() { return triggers; }
+    /** Host beat (quarter notes) for a timeline sample position, from the recorded beat map. */
+    double beatAt (int64_t timelinePos) const;
     void publishTriggers();
     /** Replace the trigger list as one undoable step. A user edit marks changed triggers as locked
-        (live re-detection keeps them) and switches playback to the edited list. */
+        (live re-detection keeps them). */
     void commitTriggerEdit (std::vector<Trigger> newList, const juce::String& actionName, bool userEdit = true);
     juce::String getLearnStatus() const { return learnStatus; }
     bool isAnalysing() const { return analysing.load(); }
@@ -187,9 +196,14 @@ private:
     int numPending = 0;
     int64_t internalTimeline = 0;
     std::vector<float> envLevel, envThreshold;
+    static constexpr int kBeatBin = 512;
+    std::vector<double> beatMap;   // host beat position (quarter notes) per kBeatBin samples of the history; NaN = unknown
     int64_t lastScopePoint = 0;
     std::atomic<int64_t> scopeOffset { 0 };
     juce::String trackName;
+    bool blockHasBeat = false;
+    double blockBeat = 0.0, blockBeatsPerSample = 0.0;
+    int64_t blockTimeline = 0;
     Instrument lastInstrument = Instrument::Count;
     ReplaceSettings lastReplaceSettings;
     DebleedSettings lastDebleedSettings;

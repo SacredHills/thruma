@@ -227,8 +227,43 @@ TEST_CASE ("Detection: loud bleed and a long snare break do not cause false trig
         std::snprintf (label, sizeof label, "snare +6 dB bleed, sens %.0f%%", sens * 100);
         printScore (label, sc);
         tf::metric ("  false triggers during the 12 s break", inBreak);
-        CHECK (sc.precision() >= (sens > 0.4f ? 0.85 : 0.95));
-        CHECK (inBreak <= (sens > 0.4f ? 5 : 0));
+        // default sensitivity trades a few bleed hits (dragging the threshold up removes them) for fast-playing accuracy
+        CHECK (sc.precision() >= (sens > 0.4f ? 0.8 : 0.95));
+        CHECK (inBreak <= (sens > 0.4f ? 7 : 0));
         CHECK (truthOf (s, sig::Snare, false).size() > 0);
+    }
+}
+
+TEST_CASE ("Detection: fast playing - snare rolls and fast double bass with hi-hat bleed")
+{
+    const double sr = 48000.0;
+    struct Case { bool snare; double spacingMs; double minRecall; double maxMeanErrMs; };
+    for (auto c : { Case { true, 83, 0.97, 0.3 }, Case { true, 62, 0.94, 0.4 }, Case { true, 47, 0.92, 0.5 }, Case { true, 37, 0.82, 0.7 },
+                    Case { false, 62, 0.95, 0.1 }, Case { false, 47, 0.92, 0.1 }, Case { false, 37, 0.92, 0.1 } })
+    {
+        sig::Rng r (7);
+        const auto N = (int64_t) (8 * sr);
+        sig::Buf x ((size_t) N, 0.0f);
+        std::vector<sig::Buf> v;
+        for (unsigned k = 0; k < 4; ++k) v.push_back (c.snare ? sig::snare (sr, k + 3) : sig::kick (sr, k + 3));
+        std::vector<int64_t> truth;
+        for (double t = 0.3; t < 7.5; t += c.spacingMs / 1000.0)
+        {
+            const auto p = (int64_t) (t * sr + r.range (-1, 1) * 0.0005 * sr);
+            sig::addAt (x, v[truth.size() % 4], p, r.range (0.45f, 0.9f));
+            truth.push_back (p);
+        }
+        const auto hv = sig::hat (sr, 9);
+        for (double t = 0.31; t < 7.5; t += 0.125) sig::addAt (x, hv, (int64_t) (t * sr), 0.5f * dbToGain (-12.0f));
+
+        DetectorSettings ds;
+        ds.instrument = c.snare ? Instrument::Snare : Instrument::Kick;
+        const auto sc = sig::scoreOnsets (positions (detect (x, sr, ds)), truth, sr, std::min (8.0, c.spacingMs * 0.4));
+        char label[64];
+        std::snprintf (label, sizeof label, "%s every %.0f ms", c.snare ? "snare roll" : "double kick", c.spacingMs);
+        printScore (label, sc);
+        CHECK (sc.recall() >= c.minRecall);
+        CHECK (sc.precision() >= 0.94);
+        CHECK (sc.meanAbsErrMs <= c.maxMeanErrMs);
     }
 }

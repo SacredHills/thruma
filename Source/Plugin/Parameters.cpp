@@ -69,7 +69,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     layout.add (ms (ids::repAlign, "Align", -5.0f, 20.0f, 0.0f));
     layout.add (std::make_unique<B> (ParameterID { ids::repAutoAlign, 1 }, "Auto Align", true));
     layout.add (std::make_unique<C> (ParameterID { ids::repLatency, 1 }, "Lookahead",
-                                     StringArray { "Accurate (10 ms)", "Low latency (3 ms)" }, 0, nonAuto));
+                                     StringArray { "Automatic (per drum, 4.5-8 ms)", "Lowest (3 ms)" }, 0, nonAuto));
     layout.add (std::make_unique<B> (ParameterID { ids::midiOut, 1 }, "MIDI Out", true));
 
     // --- Debleed (main) ---

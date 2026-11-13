@@ -330,6 +330,15 @@ int main (int argc, char** argv)
         juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
         st = inspectState (*fresh);
         check (st.triggers >= 47 && st.triggers <= 49, "replaying a section re-detects without duplicates: " + juce::String (st.triggers));
+
+        // Finalize: playing a different section must not change the notes any more
+        const int before = st.triggers;
+        setParamPlain (*fresh, "Trigger Source", 0.5f);   // "Edited triggers" = Finalize
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        playTransport (*fresh, ph, 1200000, 6.0, 512);    // a new section that would add ~24 hits when live
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+        st = inspectState (*fresh);
+        check (st.triggers == before, "finalized notes stay unchanged while playing: " + juce::String (st.triggers) + " (was " + juce::String (before) + ")");
         fresh->releaseResources();
         fresh->setPlayHead (nullptr);
     }

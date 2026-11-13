@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Resampler.h"
 
 #include <cstring>
 #include <limits>
@@ -91,7 +92,7 @@ ThrumaProcessor::ThrumaProcessor()
                           .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
-    for (auto* id : { ids::dbOn, ids::dbReference, ids::repLatency })
+    for (auto* id : { ids::dbOn, ids::dbReference, ids::repLatency, ids::instrument })
         apvts.addParameterListener (id, this);
 
     kitPublisher.publish (kitManager.buildKit (currentRate));
@@ -106,7 +107,7 @@ ThrumaProcessor::~ThrumaProcessor()
     cancelPendingUpdate();
     workers->removeAllJobs (true, 20000);
     workers.reset();
-    for (auto* id : { ids::dbOn, ids::dbReference, ids::repLatency })
+    for (auto* id : { ids::dbOn, ids::dbReference, ids::repLatency, ids::instrument })
         apvts.removeParameterListener (id, this);
     if (publishId.load() >= 0) LinkHub::getInstance().unregisterSource (publishId.load());
 }
@@ -173,7 +174,8 @@ void ThrumaProcessor::releaseResources()
 void ThrumaProcessor::configureEngines()
 {
     const int latencyChoice = (int) apvts.getRawParameterValue (ids::repLatency)->load();
-    configuredLookaheadMs = latencyChoice == 0 ? 10.0f : 3.0f;
+    const auto inst = (Instrument) juce::jlimit (0, kNumInstruments - 1, (int) apvts.getRawParameterValue (ids::instrument)->load());
+    configuredLookaheadMs = latencyChoice == 0 ? getProfile (inst).lookaheadMs : 3.0f;
     configuredDebleed = apvts.getRawParameterValue (ids::dbOn)->load() > 0.5f;
     configuredLinked = (ReferenceSource) (int) apvts.getRawParameterValue (ids::dbReference)->load() == ReferenceSource::Linked;
 
@@ -258,7 +260,7 @@ void ThrumaProcessor::maybeAutoLearn()
 {
     // Learn continuously from what the track has played: take-level dynamics and the drum's fingerprint for
     // live detection, and (when debleed is on) decay times, bleed spectrum and reference transfer.
-    if (! prepared || analysing.load()) return;
+    if (! prepared || analysing.load() || isFinalized()) return;
     const int inst = (int) apvts.getRawParameterValue (ids::instrument)->load();
     if (inst != lastLearnInstrument) { lastLearnInstrument = inst; lastLearnLength = 0; }
 
@@ -410,6 +412,13 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     const bool playing = newMode != 0;
     const int64_t timeline = newMode == 1 ? hostTime : internalTimeline;
+    blockHasBeat = newMode == 1 && pos.hasValue() && pos->getPpqPosition().hasValue() && pos->getBpm().hasValue() && *pos->getBpm() > 1.0;
+    if (blockHasBeat)
+    {
+        blockBeat = *pos->getPpqPosition();
+        blockBeatsPerSample = *pos->getBpm() / 60.0 / currentRate;
+        blockTimeline = timeline;
+    }
     blockPlaying = playing;
     if (pos.hasValue() && pos->getBpm().hasValue()) lastBpm.store (*pos->getBpm());
     transportPlaying.store (playing);
@@ -474,8 +483,9 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
     }
     if (const auto* lm = liveModelPublisher.acquire(); lm != nullptr && lm->seq != appliedLiveModelSeq)
     {
-        replace.getDetector().setVelocityReference (lm->object->refDb);
-        replace.getDetector().setSpectralTemplate (lm->object->tmpl);
+        // learned values only seed the live detector: it keeps adapting, so it can never get "stuck"
+        replace.getDetector().seedVelocityReference (lm->object->refDb);
+        replace.getDetector().seedSpectralTemplate (lm->object->tmpl);
         appliedLiveModelSeq = lm->seq;
     }
 
@@ -527,7 +537,8 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
         ref = ok ? refBuf.data() : nullptr;
     }
 
-    if (playing && capture.capacity > 0)
+    const bool recordHistory = playing && capture.capacity > 0 && rs.source == TriggerSource::Live;
+    if (recordHistory)
     {
         auto origin = capture.origin.load (std::memory_order_relaxed);
         if (origin < 0)
@@ -550,6 +561,11 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
             }
             if (idx + n > capture.length.load (std::memory_order_relaxed))
                 capture.length.store (idx + n, std::memory_order_release);
+
+            // the DAW's beat grid, so exported MIDI lands exactly where the DAW expects it (tempo changes included)
+            if (blockHasBeat)
+                for (int64_t b = (idx + kBeatBin - 1) / kBeatBin; b * kBeatBin < idx + n && b < (int64_t) beatMap.size(); ++b)
+                    beatMap[(size_t) b] = blockBeat + (double) (b * kBeatBin - idx + (chunkTimeline - blockTimeline)) * blockBeatsPerSample;
         }
     }
 
@@ -645,7 +661,7 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
         const auto& sc = replace.getScope();
         const auto written = sc.pointsWritten.load (std::memory_order_relaxed);
         const auto origin = capture.origin.load (std::memory_order_relaxed);
-        if (engineTimeline >= 0 && origin >= 0 && ! envLevel.empty())
+        if (rs.source == TriggerSource::Live && engineTimeline >= 0 && origin >= 0 && ! envLevel.empty())
         {
             const int64_t engEnd = replace.getInputPosition();
             scopeOffset.store (engineTimeline + n - engEnd, std::memory_order_relaxed);
@@ -727,9 +743,6 @@ void ThrumaProcessor::commitTriggerEdit (std::vector<Trigger> newList, const juc
             if (old == nullptr || old->position != t.position || std::abs (old->velocity - t.velocity) > 1.0e-6f)
                 t.locked = true;
         }
-        if (auto* src = apvts.getParameter (ids::repSource);
-            src != nullptr && (int) apvts.getRawParameterValue (ids::repSource)->load() == (int) TriggerSource::Live)
-            src->setValueNotifyingHost (src->convertTo0to1 ((float) TriggerSource::Edited));
     }
     undoManager.beginNewTransaction (actionName);
     undoManager.perform (new TriggerEditAction (*this, triggers.getAll(), std::move (newList)));
@@ -762,6 +775,7 @@ void ThrumaProcessor::allocateCapture()
     capture.length.store (0);
     envLevel.assign ((size_t) (cap / kEnvBin + 1), -180.0f);
     envThreshold.assign ((size_t) (cap / kEnvBin + 1), -180.0f);
+    beatMap.assign ((size_t) (cap / kBeatBin + 2), std::numeric_limits<double>::quiet_NaN());
     lastLearnLength = 0;
 }
 
@@ -773,6 +787,7 @@ void ThrumaProcessor::clearCapture()
     for (auto& d : capture.data) std::fill (d.begin(), d.end(), 0.0f);
     std::fill (envLevel.begin(), envLevel.end(), -180.0f);
     std::fill (envThreshold.begin(), envThreshold.end(), -180.0f);
+    std::fill (beatMap.begin(), beatMap.end(), std::numeric_limits<double>::quiet_NaN());
     suspendProcessing (false);
     storedOverview.clear();
     lastLearnLength = 0;
@@ -834,6 +849,24 @@ void ThrumaProcessor::buildStoredOverview()
     storedOverviewOrigin = capture.origin.load();
 }
 
+double ThrumaProcessor::beatAt (int64_t pos) const
+{
+    const auto origin = capture.origin.load();
+    if (origin >= 0 && ! beatMap.empty())
+    {
+        const auto rel = pos - origin;
+        const auto b = rel / kBeatBin;
+        if (rel >= 0 && b + 1 < (int64_t) beatMap.size() && ! std::isnan (beatMap[(size_t) b]))
+        {
+            const double frac = (double) (rel - b * kBeatBin) / kBeatBin;
+            const double next = beatMap[(size_t) b + 1];
+            const double perBin = ! std::isnan (next) ? next - beatMap[(size_t) b] : lastBpm.load() / 60.0 / currentRate * kBeatBin;
+            return beatMap[(size_t) b] + frac * perBin;
+        }
+    }
+    return (double) pos / currentRate * lastBpm.load() / 60.0;   // no beat info (own clock / imported audio): constant tempo
+}
+
 bool ThrumaProcessor::exportMidi (const juce::File& file) const
 {
     const int slot = [this]
@@ -844,12 +877,82 @@ bool ThrumaProcessor::exportMidi (const juce::File& file) const
     const auto* kit = kitPublisher.getLatest();
     const int note = kit != nullptr ? kit->slots[(size_t) slot].midiNote : getProfile ((Instrument) slot).defaultMidiNote;
 
-    std::vector<MidiNoteEvent> notes;
+    std::vector<MidiBeatNote> notes;
     for (auto& t : triggers.getAll())
-        notes.push_back ({ t.position, note, velocityToMidi (t.velocity) });
-    const auto bytes = writeMidiFile (notes, currentRate, lastBpm.load(), 960, 0.05,
-                                      std::string ("Thruma ") + getInstrumentName ((Instrument) slot));
+        notes.push_back ({ beatAt (t.position), note, velocityToMidi (t.velocity) });
+    const auto bytes = writeMidiFileBeats (notes, lastBpm.load(), 960, 0.1, std::string ("Thruma ") + getInstrumentName ((Instrument) slot));
+    file.deleteFile();
     return file.replaceWithData (bytes.data(), bytes.size());
+}
+
+void ThrumaProcessor::setFinalized (bool f)
+{
+    if (auto* src = apvts.getParameter (ids::repSource))
+        src->setValueNotifyingHost (src->convertTo0to1 ((float) (f ? TriggerSource::Edited : TriggerSource::Live)));
+}
+
+void ThrumaProcessor::importAudio (const juce::File& file, std::function<void (const juce::String&)> onDone)
+{
+    std::unique_ptr<juce::AudioFormatReader> reader (kitManager.getFormatManager().createReaderFor (file));
+    if (reader == nullptr) { if (onDone) onDone ("Could not read " + file.getFileName()); return; }
+    if (analysing.exchange (true)) { if (onDone) onDone ("Busy - try again in a moment."); return; }
+
+    const double fileRate = reader->sampleRate;
+    const auto maxLen = (int64_t) (fileRate * 600.0);   // up to 10 minutes
+    const int len = (int) std::min<juce::int64> (reader->lengthInSamples, maxLen);
+    juce::AudioBuffer<float> buf ((int) juce::jmax (1u, juce::jmin (2u, reader->numChannels)), len);
+    reader->read (&buf, 0, len, 0, true, buf.getNumChannels() > 1);
+    auto mono = std::make_shared<std::vector<float>> ((size_t) len);
+    for (int i = 0; i < len; ++i)
+    {
+        float v = 0.0f;
+        for (int c = 0; c < buf.getNumChannels(); ++c) v += buf.getSample (c, i);
+        (*mono)[(size_t) i] = v / (float) buf.getNumChannels();
+    }
+
+    ReplaceSettings rs; DebleedSettings ds; ReferenceSource ref; bool mo;
+    readParameters (rs, ds, ref, mo);
+    const double sr = currentRate;
+    const auto name = file.getFileName();
+    juce::WeakReference<ThrumaProcessor> weak (this);
+
+    workers->addJob ([weak, mono, fileRate, sr, rs, name, onDone]
+    {
+        auto audio = std::make_shared<std::vector<float>> (std::abs (fileRate - sr) > 0.5 ? resampleHighQuality (*mono, fileRate, sr) : *mono);
+        auto level = std::make_shared<std::vector<float>>();
+        auto thr = std::make_shared<std::vector<float>>();
+        float refDb = -150.0f;
+        SpectralTemplate tmpl;
+        auto found = std::make_shared<std::vector<Trigger>> (analyseTake (audio->data(), (int64_t) audio->size(), sr, rs.detector,
+                                                                         &refDb, &tmpl, level.get(), thr.get(), kEnvBin));
+        juce::MessageManager::callAsync ([weak, audio, level, thr, found, name, onDone]
+        {
+            auto* self = weak.get();
+            if (self == nullptr) return;
+            self->suspendProcessing (true);
+            auto& cap = self->capture;
+            const auto len = (int64_t) audio->size();
+            if (cap.capacity < len)
+            {
+                cap.capacity = len;
+                cap.data[0].assign ((size_t) len, 0.0f);
+                self->envLevel.assign ((size_t) (len / kEnvBin + 1), -180.0f);
+                self->envThreshold.assign ((size_t) (len / kEnvBin + 1), -180.0f);
+                self->beatMap.assign ((size_t) (len / kBeatBin + 2), std::numeric_limits<double>::quiet_NaN());
+            }
+            std::copy (audio->begin(), audio->end(), cap.data[0].begin());
+            std::fill (self->beatMap.begin(), self->beatMap.end(), std::numeric_limits<double>::quiet_NaN());
+            std::copy (level->begin(), level->begin() + (long) std::min (level->size(), self->envLevel.size()), self->envLevel.begin());
+            std::copy (thr->begin(), thr->begin() + (long) std::min (thr->size(), self->envThreshold.size()), self->envThreshold.begin());
+            cap.origin.store (0);           // the imported file starts at the start of the song
+            cap.length.store (len);
+            self->suspendProcessing (false);
+            self->commitTriggerEdit (*found, "Import audio", false);
+            self->setFinalized (true);      // play back exactly what was found; nothing is re-detected
+            self->analysing.store (false);
+            if (onDone) onDone ("Imported " + name + ": " + juce::String ((int) found->size()) + " notes (finalized).");
+        });
+    });
 }
 
 void ThrumaProcessor::previewSample (const juce::File& file)

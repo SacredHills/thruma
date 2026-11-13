@@ -10,7 +10,7 @@
 namespace thruma::ui
 {
 
-class TrackerLane : public juce::Component, private juce::Timer, private juce::ScrollBar::Listener
+class TrackerLane : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer, private juce::ScrollBar::Listener
 {
 public:
     explicit TrackerLane (ThrumaProcessor& p);
@@ -27,6 +27,10 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
 
     void zoomToFit();
+
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int, int) override;
+    std::function<void (const juce::File&)> onAudioFileDropped;
 
 private:
     void timerCallback() override;
@@ -49,6 +53,10 @@ private:
 
     ThrumaProcessor& proc;
     juce::ScrollBar hScroll { false };
+    juce::Slider zoom;
+    void zoomChanged();
+    void syncZoomSlider();
+    double fitSpp() const;
     double viewStart = 0.0, spp = 400.0;
     bool initialised = false;
     juce::uint32 lastInteractionMs = 0;

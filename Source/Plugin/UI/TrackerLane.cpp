@@ -21,6 +21,12 @@ TrackerLane::TrackerLane (ThrumaProcessor& p) : proc (p)
     hScroll.setAutoHide (false);
     hScroll.addListener (this);
     addAndMakeVisible (hScroll);
+    zoom.setSliderStyle (juce::Slider::LinearHorizontal);
+    zoom.setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+    zoom.setRange (0.0, 1.0);
+    zoom.setTooltip ("Zoom: all the way left shows the whole song");
+    zoom.onValueChange = [this] { zoomChanged(); };
+    addAndMakeVisible (zoom);
     startTimerHz (30);
 }
 
@@ -63,8 +69,47 @@ int64_t TrackerLane::historyEnd() const
 
 void TrackerLane::resized()
 {
-    hScroll.setBounds (getLocalBounds().removeFromBottom (kScrollH));
+    auto bottom = getLocalBounds().removeFromBottom (kScrollH + 4);
+    zoom.setBounds (bottom.removeFromRight (150).reduced (2, 0));
+    bottom.removeFromRight (42);   // "ZOOM" label
+    hScroll.setBounds (bottom.withTrimmedTop (2));
     updateScrollBar();
+}
+
+double TrackerLane::fitSpp() const
+{
+    const double sr = juce::jmax (1.0, proc.getCurrentSampleRate());
+    const double len = juce::jmax ((double) (historyEnd() - historyStart()), 20.0 * sr);
+    return juce::jmax (2.0, len / juce::jmax (1, getWidth()));
+}
+
+void TrackerLane::zoomChanged()
+{
+    const double centre = viewStart + getWidth() * spp * 0.5;
+    const double fit = fitSpp();
+    spp = fit * std::pow (2.0 / fit, zoom.getValue());   // 0 = whole song, 1 = sample-level
+    viewStart = zoom.getValue() <= 0.001 ? (double) historyStart() : centre - getWidth() * spp * 0.5;
+    lastInteractionMs = juce::Time::getMillisecondCounter();
+    updateScrollBar();
+    repaint();
+}
+
+void TrackerLane::syncZoomSlider()
+{
+    const double fit = fitSpp();
+    zoom.setValue (juce::jlimit (0.0, 1.0, std::log (spp / fit) / std::log (2.0 / fit)), juce::dontSendNotification);
+}
+
+bool TrackerLane::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files) if (KitManager::isAudioFile (juce::File (f))) return true;
+    return false;
+}
+
+void TrackerLane::filesDropped (const juce::StringArray& files, int, int)
+{
+    for (auto& f : files)
+        if (KitManager::isAudioFile (juce::File (f))) { if (onAudioFileDropped) onAudioFileDropped (juce::File (f)); return; }
 }
 
 void TrackerLane::updateScrollBar()
@@ -86,6 +131,7 @@ void TrackerLane::zoomToFit()
 {
     const auto a = historyStart(), b = historyEnd();
     if (b > a) { viewStart = (double) a; spp = juce::jmax (1.0, (double) (b - a) / juce::jmax (1, getWidth())); }
+    syncZoomSlider();
     updateScrollBar();
     repaint();
 }
@@ -98,6 +144,7 @@ void TrackerLane::timerCallback()
         spp = 8.0 * sr / getWidth();   // ~8 seconds visible
         viewStart = (double) proc.getPlayheadPosition() - getWidth() * spp * 0.85;
         initialised = true;
+        syncZoomSlider();
     }
     if (proc.isTransportPlaying() && drag == Drag::None && juce::Time::getMillisecondCounter() - lastInteractionMs > 2500)
     {
@@ -233,13 +280,24 @@ void TrackerLane::paint (juce::Graphics& g)
     }
 
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.setColour (colours::textDim);
-    g.drawText ("AUDIO", 6, audio.getY() + 4, 60, 14, juce::Justification::centredLeft);
-    g.drawText ("MIDI", 6, midi.getY() + 4, 60, 14, juce::Justification::centredLeft);
+    for (auto [label, y] : { std::pair<const char*, int> { "AUDIO", audio.getY() + 4 }, { "MIDI", midi.getY() + 4 } })
+    {
+        g.setColour (colours::background.withAlpha (0.75f));
+        g.fillRoundedRectangle (3.0f, (float) y, 44.0f, 14.0f, 3.0f);
+        g.setColour (colours::textDim);
+        g.drawText (label, 6, y, 40, 14, juce::Justification::centredLeft);
+    }
+    {
+        auto zb = zoom.getBounds();
+        g.setFont (juce::FontOptions (10.0f));
+        g.setColour (colours::textDim);
+        g.drawText ("ZOOM", zb.getX() - 40, zb.getY(), 36, zb.getHeight(), juce::Justification::centredRight);
+    }
     if (origin < 0 && t.empty())
     {
         g.setFont (juce::FontOptions (14.0f));
-        g.drawFittedText ("Press play in your DAW. The drum's hits appear here as MIDI notes in real time.",
+        g.drawFittedText ("Press play in your DAW: the drum's hits appear here as MIDI notes in real time.\n"
+                          "Or drop an audio file of the drum track here (Import Audio) to analyse it offline.",
                           audio.reduced (20), juce::Justification::centred, 2);
     }
     g.setColour (colours::outline);
@@ -376,8 +434,9 @@ void TrackerLane::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWh
     else
     {
         const double anchor = xToPos (e.position.x);
-        spp = juce::jlimit (1.0, 50000.0, spp / std::exp (w.deltaY * 1.5));
+        spp = juce::jlimit (1.0, fitSpp(), spp / std::exp (w.deltaY * 1.5));
         viewStart = anchor - e.position.x * spp;
+        syncZoomSlider();
     }
     updateScrollBar();
     repaint();

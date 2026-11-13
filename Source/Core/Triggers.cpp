@@ -157,7 +157,8 @@ bool TriggerList::deserialise (const uint8_t* data, size_t size)
 //==============================================================================
 std::vector<Trigger> analyseTake (const float* audio, int64_t length, double sampleRate,
                                   const DetectorSettings& settings, float* outVelocityRefDb,
-                                  SpectralTemplate* outTemplate)
+                                  SpectralTemplate* outTemplate, std::vector<float>* outLevel,
+                                  std::vector<float>* outThreshold, int decim)
 {
     TransientDetector det;
     det.prepare (sampleRate);
@@ -196,15 +197,29 @@ std::vector<Trigger> analyseTake (const float* audio, int64_t length, double sam
     det.setSpectralTemplate (tmpl);
     det.reset (0);
     std::vector<Trigger> out;
-    for (int64_t s = 0; s < length; s += block)
-        det.process (audio + s, (int) std::min<int64_t> (block, length - s), [&] (const DetectedHit& h)
+    if (outLevel != nullptr) outLevel->assign ((size_t) (length / decim + 1), -180.0f);
+    if (outThreshold != nullptr) outThreshold->assign ((size_t) (length / decim + 1), -180.0f);
+    float acc = -180.0f;
+    for (int64_t i = 0; i < length; ++i)
+    {
+        DetectedHit h;
+        if (det.processSample (audio[i], h))
         {
             Trigger t;
             t.position = h.position;
             t.velocity = h.velocity;
             t.ghost = h.ghost;
             out.push_back (t);
-        });
+        }
+        acc = std::max (acc, det.getLevelDb());
+        if ((i + 1) % decim == 0)
+        {
+            const auto k = (size_t) (i / decim);
+            if (outLevel != nullptr) (*outLevel)[k] = acc;
+            if (outThreshold != nullptr) (*outThreshold)[k] = det.getThresholdDb();
+            acc = -180.0f;
+        }
+    }
     if (outVelocityRefDb != nullptr) *outVelocityRefDb = ref;
     if (outTemplate != nullptr) *outTemplate = tmpl;
     return out;
@@ -235,13 +250,21 @@ namespace
 std::vector<uint8_t> writeMidiFile (std::vector<MidiNoteEvent> notes, double sampleRate, double bpm,
                                     int ppq, double noteLen, const std::string& trackName)
 {
+    std::vector<MidiBeatNote> b;
+    b.reserve (notes.size());
+    for (auto& n : notes) b.push_back ({ (double) n.samplePosition / sampleRate * bpm / 60.0, n.note, n.velocity });
+    return writeMidiFileBeats (std::move (b), bpm, ppq, noteLen * bpm / 60.0, trackName);
+}
+
+std::vector<uint8_t> writeMidiFileBeats (std::vector<MidiBeatNote> notes, double bpm, int ppq,
+                                         double noteLenBeats, const std::string& trackName)
+{
     struct Ev { int64_t tick; int order; uint8_t a, b, c; };
     std::vector<Ev> evs;
-    const double ticksPerSample = (bpm / 60.0) * ppq / sampleRate;
-    const auto lenTicks = (int64_t) std::max (1.0, noteLen * sampleRate * ticksPerSample);
+    const auto lenTicks = (int64_t) std::max (1.0, noteLenBeats * ppq);
     for (auto& n : notes)
     {
-        const auto t = (int64_t) std::llround ((double) n.samplePosition * ticksPerSample);
+        const auto t = std::max<int64_t> (0, (int64_t) std::llround (n.beat * ppq));
         const uint8_t note = (uint8_t) std::clamp (n.note, 0, 127);
         const uint8_t vel = (uint8_t) std::clamp (n.velocity, 1, 127);
         evs.push_back ({ t, 1, 0x99, note, vel });           // note on, channel 10

@@ -26,11 +26,16 @@ Editing in the MIDI lane:
 | Select | Click; Shift-click to add; drag on empty space to box-select; Ctrl/Cmd+A selects all |
 | Delete | Delete / Backspace |
 | Undo / Redo | Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z |
-| Zoom / scroll | Mouse wheel zooms; Shift+wheel or the scrollbar scrolls; **F** shows the whole song |
+| Zoom / scroll | **ZOOM slider** (bottom right): all the way left shows the whole song. Mouse wheel zooms too; Shift+wheel or the scrollbar scrolls; **F** shows the whole song |
 
 The lane follows the playhead while the song plays.
 
-**Live vs edited:** while you haven't edited anything, hits are detected live every time the song plays, and replaying a section re-detects it without duplicates. As soon as you edit a note, your edited notes are what plays back. **Clear** removes all notes and returns to live detection.
+**Live vs Finalized:**
+- **Live** (default): hits are detected every time the song plays. Replaying a section re-detects it without duplicates. Notes you edited by hand are kept.
+- **Finalize:** press it when you are happy with the notes. They are frozen: playback plays exactly these notes and nothing is re-detected. Press it again to go back to live detection.
+- **Clear** removes all notes and returns to live detection.
+
+**Import Audio… (non-live mode):** choose an audio file of the drum track (WAV, AIFF, FLAC, …, up to 10 minutes), or drop it onto the lane. Thruma analyses the whole file at once, shows its waveform and notes, and finalizes the result. Start the file at the song start so the notes line up with your DAW.
 
 ### Track panel
 | Control | What it does |
@@ -47,8 +52,10 @@ The panel also shows the note count, whether Thruma is listening, and how many s
 | **Velocity** | 0 % = every hit at full level, 100 % = follow the played dynamics |
 | **Blend** | 0 % = original drum, 100 % = replacement sample |
 | **Output** | Output level |
-| **Drag MIDI** | Drag this into your DAW to drop the notes as a MIDI clip. Note positions are measured from the start of the song, so drop the clip at bar 1 to line it up |
-| **Save MIDI…** | Saves the notes as a `.mid` file |
+| **Finalize** | Freezes the current notes (see above) |
+| **Import Audio…** | Analyses an audio file instead of listening live |
+| **Drag MIDI** | Drag this into your DAW to drop the notes as a MIDI clip. Notes are placed on your DAW's own beat grid (tempo changes included), measured from the song start, so drop the clip at bar 1 to line it up |
+| **Save MIDI…** | Saves the notes as a `.mid` file, timed the same way |
 | **Clear** | Removes all notes and returns to live detection |
 
 Thruma also learns in the background while the song plays: the level of your real hits and the drum's sound. Detection gets more consistent after the first few seconds.
@@ -59,6 +66,10 @@ Thruma also learns in the background while the song plays: the level of your rea
 3. Delete any remaining false notes in the MIDI lane.
 
 **Missing quiet hits?** Drag the threshold down.
+
+**Fast playing** (rolls, blast beats, fast double bass): detection follows hits down to about 40 ms apart (16ths at 180+ BPM). Very fast snare rolls under ~40 ms may lose some notes; check the MIDI lane and add any missing ones.
+
+**Latency:** replacement uses a short look-ahead so each sample starts exactly on the hit: 8 ms for kick and toms, 6 ms for snare, 4.5–5.5 ms for hats and cymbals (set the *Lookahead* parameter in your DAW's plugin parameter list to *Lowest* for 3 ms, slightly less accurate on kicks). Your DAW compensates it. Turning on DEBLEED adds about 21 ms.
 
 ---
 

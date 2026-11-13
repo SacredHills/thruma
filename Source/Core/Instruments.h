@@ -48,6 +48,7 @@ struct DetectionProfile
     float ghostWeight;    // how much Ghost Sensitivity extends that range (snares/hats have ghost notes)
     float decayMs;        // typical amplitude decay time constant (debleed envelope model default)
     int   defaultMidiNote; // General MIDI drum map
+    float lookaheadMs;     // smallest replacement lookahead (latency) with full detection accuracy
 };
 
 const DetectionProfile& getProfile (Instrument i) noexcept;

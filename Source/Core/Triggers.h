@@ -67,7 +67,9 @@ struct TriggerSnapshot
 /** Offline detection over a whole take with take-normalised velocities (two passes). */
 std::vector<Trigger> analyseTake (const float* audio, int64_t length, double sampleRate,
                                   const DetectorSettings& settings, float* outVelocityRefDb = nullptr,
-                                  SpectralTemplate* outTemplate = nullptr);
+                                  SpectralTemplate* outTemplate = nullptr,
+                                  std::vector<float>* outLevelDb = nullptr, std::vector<float>* outThresholdDb = nullptr,
+                                  int envelopeDecimation = 64);
 
 /** A minimal Standard MIDI File (format 0, channel 10) writer. */
 struct MidiNoteEvent
@@ -80,6 +82,17 @@ struct MidiNoteEvent
 std::vector<uint8_t> writeMidiFile (std::vector<MidiNoteEvent> notes, double sampleRate, double bpm,
                                     int ppq = 960, double noteLengthSeconds = 0.05,
                                     const std::string& trackName = "Thruma");
+
+/** Notes already placed in beats (quarter notes from the start of the song). Preferred: matches the DAW's grid
+    exactly, including tempo changes. */
+struct MidiBeatNote
+{
+    double beat;
+    int note;
+    int velocity;
+};
+std::vector<uint8_t> writeMidiFileBeats (std::vector<MidiBeatNote> notes, double bpm, int ppq = 960,
+                                         double noteLengthBeats = 0.1, const std::string& trackName = "Thruma");
 
 inline int velocityToMidi (float v) noexcept
 {

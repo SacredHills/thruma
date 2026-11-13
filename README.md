@@ -104,7 +104,7 @@ This is an honest list. See also [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#lim
 - **Built-in test material:** the bundled tests use physically modeled, synthetic drum recordings with known ground truth. Real recordings can be added to `Tests/data` and are scored automatically.
 - **Live detection on sparse instruments:** with toms that only play in a fill, live detection can trigger on loud bleed before the first real hit. Raise the threshold, or delete the stray notes in the MIDI lane.
 - **Ghost notes vs bleed:** ghost notes that are exactly as loud as the bleed and spectrally similar to it can still produce false or missed triggers. Lower *Sensitivity* or edit them in the editor.
-- **Debleed latency:** about 21 ms at 44.1/48 kHz, compensated by the host. It is meant for mixing, not for live monitoring. Replacement alone uses 10 ms, or 3 ms in *Low latency* mode.
+- **Debleed latency:** about 21 ms at 44.1/48 kHz, compensated by the host. It is meant for mixing, not for live monitoring. Replacement alone uses 4.5–8 ms depending on the drum (kick 8 ms, snare 6 ms), or 3 ms with the *Lookahead* parameter set to *Lowest*.
 - **Linked instances:** these share audio inside one plugin process only. DAWs that sandbox or bridge plugins into separate processes cannot link; use the sidechain input there. Linking needs the transport running and equal upstream latency on both tracks.
 - **One target drum per instance:** for a multi-mic kit, use one instance per track.
 - **Waveform history:** the editor keeps the first 4 minutes heard per instance; live triggering continues beyond that. The heard audio itself is not saved with the project; triggers, learned settings and a waveform overview are.

@@ -56,6 +56,16 @@ void TransientDetector::setVelocityReference (float r) noexcept
     else refFixed = false;
 }
 
+void TransientDetector::seedVelocityReference (float r) noexcept
+{
+    if (std::isfinite (r) && r > -150.0f && ! refFixed) refDb = r;
+}
+
+void TransientDetector::seedSpectralTemplate (const SpectralTemplate& t) noexcept
+{
+    if (t.isValid() && ! templateFixed) { tmpl = t; tmpl.count = std::min (t.count, 8); }
+}
+
 void TransientDetector::setSpectralTemplate (const SpectralTemplate& t) noexcept
 {
     tmpl = t;
@@ -126,6 +136,8 @@ void TransientDetector::updateDerived() noexcept
     posEnv.setWindow (posHold);
 
     riseThrDb     = lerp (14.0f, 4.0f, s);
+    riseFastDb    = lerp (9.0f, 3.0f, s);    // right after real hits (fast playing) a smaller fresh attack suffices
+    fastWindow    = msToSamples (160.0, sr);
     mainRiseMinDb = lerp (3.0f, 2.0f, s);
     floorMarginDb = lerp (12.0f, 4.0f, s);
     relRangeDb    = std::max (6.0f, p.levelRangeDb + (s - 0.4f) * 50.0f);   // Sensitivity 0 % -> threshold just below the loudest hits
@@ -135,6 +147,15 @@ void TransientDetector::updateDerived() noexcept
 
     refDecayPerSample = (float) (0.05 / sr);  // adaptive reference falls very slowly (breaks must not lower it)
     smoothCoeff = onePoleCoeff (0.010 * sr);
+}
+
+float TransientDetector::thresholdNow() const noexcept
+{
+    // The floor term protects against noise/bleed, but in fast playing the measured "floor" is the drum's own
+    // ring between hits, so it may never climb to within 10 dB of the real hits.
+    const bool playingFast = (pos - lastOnset) < fastWindow;
+    const float floorTerm = playingFast ? std::min (bodyFloorDb + floorMarginDb, refDb - 10.0f) : bodyFloorDb + floorMarginDb;
+    return std::max (floorTerm, refDb - relRangeDb - ghostRelDb);
 }
 
 void TransientDetector::reset (int64_t startPosition) noexcept
@@ -164,6 +185,8 @@ void TransientDetector::reset (int64_t startPosition) noexcept
     rearmed = true;
     lastHitPeakDb = -150.0f;
     bodySmoothDb = -180.0f;
+    lastHitShapeValid = false;
+    lastHitAtkDb = -150.0f;
 }
 
 float TransientDetector::velocityFor (float peakDb) const noexcept
@@ -230,10 +253,13 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
         const bool timeOk = (pos - lastOnset) >= retrig && pos >= cooldownUntil;
         if (timeOk)
         {
+            // fast playing: a re-hit on a still-ringing drum shows a smaller fresh rise. Once the drum has decayed
+            // (re-armed) the normal rise is required again, so noise in a decaying tail cannot start a candidate.
+            const float riseThrDb = (! rearmed && (pos - lastOnset) < fastWindow) ? riseFastDb : this->riseThrDb;
             const bool trigA = atkRise >= riseThrDb && atkDb >= atkFloorDb + floorMarginDb;
             const bool trigB = bodyRise >= riseThrDb + 3.0f && bodyDb >= bodyFloorDb + floorMarginDb;
             const bool rearmOk = rearmed
-                              || (settings.doubleHits && (atkRise >= riseThrDb + 2.0f || bodyRise >= riseThrDb + 4.0f));
+                              || (settings.doubleHits && (atkRise >= riseThrDb || bodyRise >= riseThrDb + 3.0f));
             if ((trigA || trigB) && rearmOk)
             {
                 state = State::Candidate;
@@ -252,6 +278,20 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
     }
     else
     {
+        // a much stronger attack inside the window means the candidate started early (on bleed): restart at the real hit
+        if (atkE > candPeakAtk * 2.0f && atkRise >= riseFastDb && pos - candStart >= 2)
+        {
+            candStart = pos;
+            candPeakBody = bodyE;
+            candPeakFull = fullE;
+            candPeakPos = std::abs (xp);
+            candPeakPosIdx = pos;
+            candPeakAtk = atkE;
+            candLevelBeforeDb = std::max (bodyDbHist.get (std::min (riseWin + 2, bodyDbHist.capacity() - 1)), bodySmoothDb);
+            candAtkBeforeDb = atkDbHist.get (std::min (riseWin + 2, atkDbHist.capacity() - 1));
+            specAcc.fill (0.0);
+            specCount = 0;
+        }
         candPeakBody = std::max (candPeakBody, bodyE);
         candPeakFull = std::max (candPeakFull, fullE);
         candPeakAtk  = std::max (candPeakAtk, atkE);
@@ -272,7 +312,7 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
         {
             const float peakDb = fastDb (candPeakBody);
             const float fullDb = fastDb (candPeakFull);
-            const float absThr = std::max (bodyFloorDb + floorMarginDb, refDb - relRangeDb - ghostRelDb);
+            const float absThr = thresholdNow();
             const bool levelOk = peakDb >= absThr;
             // Body must rise. While the previous hit still rings, body fluctuations (beating of overlapping
             // decays) are unreliable, so a hit-like attack is also required there. A clear fresh attack on a
@@ -284,7 +324,8 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                                             : (peakDb - candLevelBeforeDb) >= std::max (3.0f, mainRiseMinDb)
                                                   && atkLikeHit && atkRise >= 0.5f * riseThrDb;
             const bool riseOk = bodyRiseOk
-                             || (atkRise >= 0.6f * riseThrDb && peakDb >= lastHitPeakDb - 10.0f && atkPeakDb >= atkRefDb - 6.0f);
+                             || (atkRise >= 0.6f * riseThrDb && peakDb >= lastHitPeakDb - 10.0f && atkPeakDb >= atkRefDb - 6.0f
+                                 && atkPeakDb >= lastHitAtkDb - 8.0f);
             const bool focusOk = ! settings.frequencyFocus || (peakDb - fullDb) >= focusMinDb;
 
             // spectral fingerprint of this candidate
@@ -309,11 +350,14 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                 dist = shapeDistance (shape, tmpl);
                 // the quieter the candidate (closer to the bleed level), the closer it must sound like the drum
                 const float depth = std::clamp ((refDb - peakDb) / std::max (6.0f, relRangeDb + ghostRelDb), 0.0f, 1.0f);
-                shapeOk = dist <= specThrDb * (1.0f - 0.45f * depth);
+                // candidates accepted under the looser fast-playing rules must sound even more like the drum
+                const float fastPenalty = (! rearmed && (candStart - lastOnset) < fastWindow) ? 0.75f : 1.0f;
+                shapeOk = dist <= specThrDb * (1.0f - 0.45f * depth) * fastPenalty;
             }
 
             state = State::Idle;
 #ifdef THRUMA_DETECTOR_DEBUG
+            std::printf ("atk rise=%.1f vsLast=%.1f vsRef=%.1f rearmed=%d bodyRiseOk=%d sinceLast=%.1fms\n", atkRise, atkPeakDb - lastHitAtkDb, atkPeakDb - atkRefDb, (int) rearmed, (int) bodyRiseOk, (candStart - lastOnset) * 1000.0 / sr);
             std::printf ("cand %lld peak=%.1f before=%.1f full=%.1f absThr=%.1f floor=%.1f ref=%.1f dist=%.1f -> %d%d%d%d  [%.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f]\n",
                          (long long) candStart, peakDb, candLevelBeforeDb, fullDb, absThr, bodyFloorDb, refDb, dist,
                          levelOk, riseOk, focusOk, shapeOk, shape[0], shape[1], shape[2], shape[3], shape[4], shape[5], shape[6], shape[7]);
@@ -323,8 +367,10 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             {
                 // --- sub-ms onset positioning: walk back from the peak to the first threshold crossing ---
                 const int64_t limit = std::max (candStart - backtrack, pos - (int64_t) posEnvRing.capacity() + 2);
-                const float residual = posEnvRing.get ((int) (pos - limit));
-                const float thr = std::min (0.6f * candPeakPos, std::max (0.15f * candPeakPos, 2.0f * residual));
+                // threshold between the level just before the hit (bleed / previous ring) and the hit's peak
+                float residual = posEnvRing.get ((int) (pos - limit));
+                for (int64_t k = limit; k < candStart; ++k) residual = std::min (residual, posEnvRing.get ((int) (pos - k)));
+                const float thr = residual + 0.2f * std::max (0.0f, candPeakPos - residual);
                 int64_t onset = -1;
                 for (int64_t k = candPeakPosIdx; k >= limit; --k)
                 {
@@ -342,11 +388,19 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                 hit.velocity = velocityFor (peakDb);
                 hit.ghost    = peakDb < refDb - 14.0f;
                 hit.shape    = shape;
+                lastHitShape = shape;
+                lastHitShapeValid = true;
 
-                if (! refFixed && peakDb > refDb)
-                    refDb += 0.5f * (peakDb - refDb);
+                if (! refFixed)
+                {
+                    // robust running reference: limited step up (a single freak peak cannot raise the threshold
+                    // for minutes) and a slow step down when the playing gets quieter
+                    if (peakDb > refDb) refDb += std::min (1.5f, 0.5f * (peakDb - refDb));
+                    else if (peakDb > refDb - 12.0f) refDb -= 0.03f * (refDb - peakDb);
+                }
                 if (atkPeakDb > atkRefDb)
                     atkRefDb += 0.5f * (atkPeakDb - atkRefDb);
+                lastHitAtkDb = atkPeakDb;
 
                 // learn the fingerprint from confident hits; restart if the reference jumped (louder source found)
                 if (! templateFixed && peakDb >= refDb - 6.0f)

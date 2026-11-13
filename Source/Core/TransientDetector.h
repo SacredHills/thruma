@@ -64,6 +64,10 @@ public:
     void setVelocityReference (float refDb) noexcept;
     float getVelocityReference() const noexcept { return refDb; }
 
+    /** Start values for adaptive tracking (learning continues afterwards). */
+    void seedVelocityReference (float refDb) noexcept;
+    void seedSpectralTemplate (const SpectralTemplate& t) noexcept;
+
     /** Fix the spectral fingerprint (e.g. learned by offline analysis); an invalid template re-enables learning. */
     void setSpectralTemplate (const SpectralTemplate& t) noexcept;
     const SpectralTemplate& getSpectralTemplate() const noexcept { return tmpl; }
@@ -78,7 +82,7 @@ public:
 
     // --- metering for the live display (read on the audio thread after processSample) ---
     float getLevelDb() const noexcept { return lastBodyDb; }      // body-band envelope (what is compared to the threshold)
-    float getThresholdDb() const noexcept { return std::max (bodyFloorDb + floorMarginDb, refDb - relRangeDb - ghostRelDb); }
+    float getThresholdDb() const noexcept { return thresholdNow(); }
     float getFloorDb() const noexcept { return bodyFloorDb; }
     /** True once after a candidate was rejected; its start position is returned. */
     bool takeRejection (int64_t& where) noexcept { if (rejectedPos < 0) return false; where = rejectedPos; rejectedPos = -1; return true; }
@@ -99,6 +103,7 @@ public:
 
 private:
     void updateDerived() noexcept;
+    float thresholdNow() const noexcept;
     float velocityFor (float peakDb) const noexcept;
 
     DetectorSettings settings;
@@ -111,8 +116,8 @@ private:
     DelayLine bodyDbHist, atkDbHist, posEnvRing;
 
     // derived (samples / dB)
-    int holdBody = 1, holdAtk = 1, riseWin = 1, velWindow = 1, backtrack = 1, retrig = 1, posHold = 1;
-    float riseThrDb = 8, mainRiseMinDb = 1, floorMarginDb = 8, relRangeDb = 36, ghostRelDb = 20, focusMinDb = -14;
+    int fastWindow = 1, holdBody = 1, holdAtk = 1, riseWin = 1, velWindow = 1, backtrack = 1, retrig = 1, posHold = 1;
+    float riseThrDb = 8, riseFastDb = 6, mainRiseMinDb = 1, floorMarginDb = 8, relRangeDb = 36, ghostRelDb = 20, focusMinDb = -14;
     float refDecayPerSample = 0;
     bool hasBodyLp = false, hasAtkLp = false;
 
@@ -146,6 +151,9 @@ private:
     float bodySmoothDb = -180.0f, smoothCoeff = 0.99f;
     float lastBodyDb = -180.0f;
     int64_t rejectedPos = -1;
+    std::array<float, SpectralTemplate::kBands> lastHitShape {};
+    bool lastHitShapeValid = false;
+    float lastHitAtkDb = -150.0f;
     bool rearmed = true;
 };
 

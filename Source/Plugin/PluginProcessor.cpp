@@ -1200,6 +1200,7 @@ juce::String ThrumaProcessor::locateTo (int64_t pos)
     {
         previewPos.store (pos);
         playhead.store (pos);
+        hostBridge.locate (pos);   // where the DAW allows it (RAVENYR), its playhead follows too
         return {};
     }
     if (hostBridge.locate (pos))

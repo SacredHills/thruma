@@ -343,7 +343,15 @@ int main()
         for (int blk = 0; blk < 4; ++blk) { buf.clear(); p8->processBlock (buf, midi); }
         pump (100);
         const auto head = p8->getPlayheadPosition();
-        check (p8->isPreviewPlaying() && std::abs ((double) head - target) < 48000 / 4, "ruler click during in-plugin playback jumps there: playhead "
+        p8->togglePlay();
+        fakeLocated = -1;
+        buf.clear(); p8->processBlock (buf, midi);
+        const auto stoppedWhy = p8->locateTo (48000 * 7);
+        check (stoppedWhy.isEmpty() && fakeLocated == 48000 * 7, "stopped, imported audio: a ruler click also moves the DAW's playhead (RAVENYR)");
+        p8->togglePlay();
+        p8->locateTo ((int64_t) target);
+        for (int blk = 0; blk < 4; ++blk) { buf.clear(); p8->processBlock (buf, midi); }
+        check (p8->isPreviewPlaying() && std::abs ((double) p8->getPlayheadPosition() - target) < 48000 / 4, "ruler click during in-plugin playback jumps there: playhead "
                + juce::String ((double) head / 48000.0, 2) + " s");
 
         auto corrAt = [&] (float blend)

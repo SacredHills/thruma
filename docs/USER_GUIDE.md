@@ -12,7 +12,9 @@ Thruma is one plugin (a VST3 *instrument* with an audio input) that you can use 
 - **On a drum audio track** (as an insert): it tracks the drum, replaces or layers it, and makes MIDI.
 - **On a MIDI / instrument track**: it is a drum sample player. MIDI clips on the track play the kit (SAMPLES page). You can also import a MIDI file into Thruma itself (see below).
 
-Some DAWs only list instruments on MIDI tracks; in those, route the drum track into Thruma's input or sidechain. RAVENYR lists Thruma as an insert on audio tracks too.
+Some DAWs (e.g. Studio One) only offer instruments on instrument tracks, with no main audio input. There, send the drum track to Thruma's **sidechain**: with no main input, Thruma tracks the sidechain. RAVENYR lists Thruma as an insert on audio tracks too.
+
+**Blend** mixes the original drum (0 %) with the samples (100 %). It needs samples loaded for the selected drum (SAMPLES page). With no samples, the original always passes through unchanged.
 
 ## REPLACE
 

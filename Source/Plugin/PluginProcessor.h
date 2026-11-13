@@ -36,6 +36,7 @@ struct CaptureBuffer
     std::array<std::vector<float>, kChannels> data;
     std::atomic<int64_t> origin { -1 };   // host timeline position of index 0
     std::atomic<int64_t> length { 0 };    // highest written index + 1
+    std::atomic<int64_t> firstIndex { 0 }; // first index actually recorded (the start is pre-roll room)
     int64_t capacity = 0;
     double sampleRate = 0.0;
     bool hasRef = false;
@@ -290,6 +291,8 @@ private:
     juce::String detectionSettingsKey() const;
     std::atomic<bool> previewPlaying { false };
     std::atomic<int64_t> previewPos { 0 };
+    std::atomic<bool> previewMode { false };
+    bool hostReportsPlayFlag = false;   // audio thread   // imported audio loaded: the stopped playhead is the preview position
 
     struct MidiSequence { std::vector<MidiBeatNote> notes; };   // sorted by beat
     RcuPublisher<MidiSequence> midiSeqPublisher;

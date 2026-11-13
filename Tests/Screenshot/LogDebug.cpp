@@ -184,6 +184,144 @@ int main()
         check (fakePlaying == 1, "Play starts the host transport");
     }
 
+    // ---- 4) instrument with the main input switched off (Studio One): both channels, sidechain as the drum ----
+    {
+        std::unique_ptr<ThrumaProcessor> p3 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        auto layout = p3->getBusesLayout();
+        layout.inputBuses.getReference (0) = juce::AudioChannelSet::disabled();
+        layout.inputBuses.getReference (1) = juce::AudioChannelSet::stereo();
+        check (p3->setBusesLayout (layout), "layout without main input accepted");
+        PH ph3; ph3.playing = true; p3->setPlayHead (&ph3); p3->prepareToPlay (48000.0, 512);
+        p3->getKitManager().assignFiles ((int) Instrument::Snare, { click });
+        p3->getKitManager().assignFiles ((int) Instrument::Kick, { click });
+        p3->rebuildKit();
+        pump (100);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        float l = 0, r = 0;
+        for (int blk = 0; blk < 20; ++blk)
+        {
+            buf.clear(); midi.clear(); ph3.pos = blk * 512;
+            if (blk == 2) midi.addEvent (juce::MidiMessage::noteOn (10, 36, (juce::uint8) 110), 100);
+            p3->processBlock (buf, midi);
+            l = std::max (l, buf.getMagnitude (0, 0, 512)); r = std::max (r, buf.getMagnitude (1, 0, 512));
+        }
+        check (l > 0.3f && std::abs (l - r) < 0.01f, "no main input: MIDI plays on both channels (L " + juce::String (l, 2) + ", R " + juce::String (r, 2) + ")");
+
+        // sidechain drum (in the first channels) triggers the snare, on both sides
+        std::mt19937 rng (3); std::uniform_real_distribution<float> u (-1, 1);
+        int hitsL = 0; float rr = 0;
+        for (int64_t pos = 0; pos < 48000 * 4; pos += 512)
+        {
+            ph3.pos = 20 * 512 + pos; midi.clear();
+            for (int i = 0; i < 512; ++i)
+            {
+                const double t = std::fmod ((double) (pos + i) / 48000.0, 0.5);
+                const float v = (float) (0.5 * std::exp (-t / 0.04)) * u (rng);
+                buf.setSample (0, i, v); buf.setSample (1, i, v);
+            }
+            p3->processBlock (buf, midi);
+            rr = std::max (rr, buf.getMagnitude (1, 0, 512));
+        }
+        pump (300);
+        hitsL = (int) p3->getTriggers().size();
+        check (hitsL >= 7, "sidechain drum is tracked when there is no main input: " + juce::String (hitsL) + " hits");
+        check (rr > 0.3f, "and the right channel carries the replacement");
+    }
+
+    // ---- 5) blend: 0 % = original only, 100 % = samples only ----
+    {
+        std::unique_ptr<ThrumaProcessor> p4 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH ph4; p4->setPlayHead (&ph4); p4->prepareToPlay (48000.0, 512);
+        auto tone = writeWav ("thruma_tone.wav", [] (int i) { return 0.8f * std::sin ((float) i * 0.05f) * std::exp (-(float) i / 4000.0f); }, 24000, 48000.0);
+        p4->getKitManager().assignFiles ((int) Instrument::Snare, { tone });
+        p4->rebuildKit();
+        auto runWith = [&] (float blend) -> std::pair<double, double>   // (correlation with dry, energy)
+        {
+            p4->apvts.getParameter (ids::repBlend)->setValueNotifyingHost (blend);
+            pump (50);
+            std::mt19937 rng (9); std::uniform_real_distribution<float> u (-1, 1);
+            juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+            std::vector<float> in, out;
+            for (int64_t pos = 0; pos < 48000 * 6; pos += 512)
+            {
+                ph4.pos = pos + (int64_t) (blend * 1.0e7);
+                for (int i = 0; i < 512; ++i)
+                {
+                    const double t = std::fmod ((double) (pos + i) / 48000.0, 0.5);
+                    const float v = (float) (0.5 * std::exp (-t / 0.04)) * u (rng);
+                    buf.setSample (0, i, v); buf.setSample (1, i, v); in.push_back (v);
+                }
+                midi.clear(); p4->processBlock (buf, midi);
+                for (int i = 0; i < 512; ++i) out.push_back (buf.getSample (0, i));
+            }
+            const int L = p4->getLatencySamples();
+            double xy = 0, xx = 0, yy = 0;
+            for (size_t i = 48000 * 3; i + L < out.size(); ++i) { xy += in[i] * out[i + L]; xx += in[i] * in[i]; yy += out[i + L] * out[i + L]; }
+            return { xy / std::sqrt (xx * yy + 1e-12), yy };
+        };
+        const auto b0 = runWith (0.0f), b1 = runWith (1.0f), bh = runWith (0.5f);
+        check (b0.first > 0.99, "blend 0 %: output is the original (correlation " + juce::String (b0.first, 3) + ")");
+        check (b1.first < 0.2, "blend 100 %: the original is gone (correlation " + juce::String (b1.first, 3) + ")");
+        check (bh.first > b1.first + 0.2 && bh.first < b0.first - 0.05, "blend 50 %: in between (correlation " + juce::String (bh.first, 3) + ")");
+    }
+
+    // ---- 6) stopped host: the playhead stays put ----
+    {
+        std::unique_ptr<ThrumaProcessor> p5 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH ph5; ph5.playing = true; ph5.pos = 0; p5->setPlayHead (&ph5); p5->prepareToPlay (48000.0, 512);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        buf.clear(); p5->processBlock (buf, midi);          // the host has played once
+        ph5.playing = false; ph5.pos = 96000;
+        for (int blk = 0; blk < 50; ++blk) { for (int i = 0; i < 512; ++i) { buf.setSample (0, i, 0.3f * std::sin (i * 0.3f)); buf.setSample (1, i, 0.3f * std::sin (i * 0.3f)); } p5->processBlock (buf, midi); }
+        check (! p5->isTransportPlaying() && p5->getPlayheadPosition() == 96000, "stopped host with audio coming in: not playing, playhead at the host cursor (" + juce::String (p5->getPlayheadPosition()) + ")");
+        // a host that keeps its position running while stopped, after it has reported play once
+        ph5.playing = true; buf.clear(); p5->processBlock (buf, midi);
+        ph5.playing = false;
+        for (int blk = 0; blk < 50; ++blk) { ph5.pos += 512; buf.clear(); p5->processBlock (buf, midi); }
+        check (! p5->isTransportPlaying(), "position running while the host says stopped: treated as stopped");
+    }
+
+    // ---- 7) turning Debleed on keeps the waveform and keeps drawing it ----
+    for (int refChoice : { 0, 1 })   // 0 = no reference, 1 = sidechain L
+    {
+        std::unique_ptr<ThrumaProcessor> p6 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH ph6; ph6.playing = true; p6->setPlayHead (&ph6); p6->prepareToPlay (48000.0, 512);
+        if (refChoice) { auto* rp = p6->apvts.getParameter (ids::dbReference); rp->setValueNotifyingHost (rp->convertTo0to1 (1.0f)); pump (100); }
+        std::mt19937 rng (4); std::uniform_real_distribution<float> u (-1, 1);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        auto playFor = [&] (int64_t from, int64_t to)
+        {
+            for (int64_t pos = from; pos < to; pos += 512)
+            {
+                ph6.pos = pos;
+                for (int i = 0; i < 512; ++i)
+                {
+                    const double t = std::fmod ((double) (pos + i) / 48000.0, 0.5);
+                    const float v = (float) (0.5 * std::exp (-t / 0.04)) * u (rng) + 0.002f * u (rng);
+                    buf.setSample (0, i, v); buf.setSample (1, i, v);
+                }
+                midi.clear(); p6->processBlock (buf, midi);
+            }
+        };
+        auto peakDb = [&] (int64_t from, int64_t to)
+        {
+            const auto& env = p6->getEnvelopeLevel();
+            float pk = -200.0f;
+            for (int64_t b = from / 64; b < to / 64 && b < (int64_t) env.size(); ++b) pk = std::max (pk, env[(size_t) b]);
+            return pk;
+        };
+        playFor (0, 48000 * 4);
+        const float before = peakDb (0, 48000 * 4);
+        p6->apvts.getParameter (ids::dbOn)->setValueNotifyingHost (1.0f);
+        pump (200);
+        p6->releaseResources(); p6->prepareToPlay (48000.0, 512);   // hosts re-prepare when the latency changes
+        playFor (48000 * 4, 48000 * 8);
+        const float kept = peakDb (0, 48000 * 4), after = peakDb (48000 * 5, 48000 * 8);
+        const juce::String tag = refChoice ? " (sidechain reference)" : " (no reference)";
+        check (kept > before - 1.0f, "Debleed on: the waveform recorded before is kept" + tag + ": " + juce::String (kept, 1) + " dB (was " + juce::String (before, 1) + ")");
+        check (after > before - 12.0f, "Debleed on: the waveform keeps being drawn" + tag + ": peak " + juce::String (after, 1) + " dB");
+    }
+
     std::printf (fails == 0 ? "ALL HARNESS CHECKS PASSED\n" : "HARNESS FAILURES: %d\n", fails);
     proc.reset();
     return fails == 0 ? 0 : 1;

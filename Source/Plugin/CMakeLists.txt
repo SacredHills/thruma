@@ -5,7 +5,7 @@ endif()
 
 juce_add_plugin(Thruma
     PRODUCT_NAME                "Thruma"
-    COMPANY_NAME                "SacredHills"
+    COMPANY_NAME                "Sacred Hills Studio"
     COMPANY_WEBSITE             "https://github.com/SacredHills/thruma"
     BUNDLE_ID                   "com.sacredhills.thruma"
     PLUGIN_MANUFACTURER_CODE    Sacr

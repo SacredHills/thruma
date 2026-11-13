@@ -10,7 +10,7 @@ namespace thruma
 
 namespace
 {
-    constexpr double kCaptureSeconds = 240.0;   // 4 minutes of target + reference capture
+    constexpr double kCaptureSeconds = 360.0;   // 6 minutes of target (+ reference) history; Analyze / Import grow it
 
     /** Undoable whole-list trigger edit (lists are small; snapshots keep undo trivially correct). */
     class TriggerEditAction : public juce::UndoableAction
@@ -131,7 +131,8 @@ void ThrumaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     const bool rateChanged = std::abs (sampleRate - currentRate) > 0.5;
     currentRate = sampleRate;
     maxBlock = juce::jmax (64, samplesPerBlock);
-    mainChannels = juce::jlimit (1, 2, getMainBusNumInputChannels());
+    // processing follows the output: as an instrument (e.g. Studio One) the main input may be switched off
+    mainChannels = juce::jlimit (1, 2, getMainBusNumOutputChannels());
     const auto* scBus = getBusCount (true) > 1 ? getBus (true, 1) : nullptr;
     sidechainChannels.store (scBus != nullptr && scBus->isEnabled() ? juce::jmin (2, scBus->getNumberOfChannels()) : 0);
 
@@ -169,6 +170,7 @@ void ThrumaProcessor::releaseResources()
     kitPublisher.markAudioIdle();
     triggerPublisher.markAudioIdle();
     previewPublisher.markAudioIdle();
+    midiSeqPublisher.markAudioIdle();
 }
 
 void ThrumaProcessor::configureEngines()
@@ -286,11 +288,12 @@ void ThrumaProcessor::maybeAutoLearn()
 
     const auto len = capture.length.load();
     const auto interval = (int64_t) ((lastLearnLength == 0 ? 6.0 : 20.0) * currentRate);
-    if (len - lastLearnLength < interval) return;
+    const auto first = std::clamp<int64_t> (capture.firstIndex.load(), 0, len);
+    if (len - std::max (lastLearnLength, first) < interval) return;   // count only audio actually recorded
     lastLearnLength = len;
     analysing.store (true);
 
-    const auto window = std::min<int64_t> (len, (int64_t) (90.0 * currentRate));
+    const auto window = std::min<int64_t> (len - first, (int64_t) (90.0 * currentRate));
     const auto from = len - window;
     auto target = std::make_shared<std::vector<float>> (capture.data[0].begin() + from, capture.data[0].begin() + len);
     auto ref = std::make_shared<std::vector<float>>();
@@ -399,6 +402,14 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c)
         buffer.clear (c, 0, total);
 
+    // No main audio input (instrument tracks, e.g. Studio One): the sidechain, which then occupies the first
+    // channels, is the drum to track. A mono source feeds both output channels.
+    const int mainIn = getMainBusNumInputChannels();
+    const auto* scBusInfo = getBusCount (true) > 1 ? getBus (true, 1) : nullptr;
+    const int effectiveIn = mainIn > 0 ? mainIn : (scBusInfo != nullptr && scBusInfo->isEnabled() ? scBusInfo->getNumberOfChannels() : 0);
+    if (effectiveIn == 1 && getMainBusNumOutputChannels() >= 2 && buffer.getNumChannels() >= 2)
+        buffer.copyFrom (1, 0, buffer, 0, 0, total);
+
     juce::Optional<juce::AudioPlayHead::PositionInfo> pos;
     if (auto* ph = getPlayHead()) pos = ph->getPosition();
 
@@ -408,12 +419,16 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     const bool hasTime = pos.hasValue() && pos->getTimeInSamples().hasValue();
     const int64_t hostTime = hasTime ? *pos->getTimeInSamples() : 0;
     const bool hostPlaying = pos.hasValue() && pos->getIsPlaying();
-    const bool advancing = hasTime && lastHostTime != std::numeric_limits<int64_t>::min() && hostTime == lastHostTime + lastHostBlock && hostTime != lastHostTime;
+    if (hostPlaying) hostReportsPlayFlag = true;
+    // a moving position counts as playing only in hosts that never report the play flag (some hosts keep the
+    // position running while stopped)
+    const bool advancing = ! hostReportsPlayFlag && hasTime && lastHostTime != std::numeric_limits<int64_t>::min()
+                           && hostTime == lastHostTime + lastHostBlock && hostTime != lastHostTime;
     lastHostTime = hasTime ? hostTime : std::numeric_limits<int64_t>::min();
     lastHostBlock = total;
 
     float inPk = 0.0f;
-    for (int c = 0; c < juce::jmin (getTotalNumInputChannels(), getMainBusNumInputChannels()); ++c)
+    for (int c = 0; c < juce::jmin (buffer.getNumChannels(), juce::jmin (2, effectiveIn)); ++c)
         inPk = std::max (inPk, buffer.getMagnitude (c, 0, total));
     if (inPk > 1.0e-4f) lastSignalBlockTime = internalTimeline;
     const bool signalPresent = internalTimeline - lastSignalBlockTime < (int64_t) (2.0 * currentRate);
@@ -422,7 +437,7 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     int newMode = 0;
     if (hostPlaying || advancing) { newMode = 1; hostTimelineSeen = true; }   // follow the host transport
-    else if (! hostTimelineSeen && signalPresent) newMode = 2;              // host gives no position: own clock
+    else if (! hostTimelineSeen && signalPresent) newMode = 2;              // host gives no moving position: own clock
     if (newMode == 1 && lastActiveMode == 2)
     {
         // the host started reporting its transport: restart the history on the host timeline
@@ -470,7 +485,10 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (pos.hasValue() && pos->getBpm().hasValue()) lastBpm.store (*pos->getBpm());
     transportPlaying.store (playing);
     transportMode.store (newMode);
-    playhead.store (timeline);
+    // stopped: show where the next playback starts (Thruma's own playback position, else the host's cursor)
+    if (playing) playhead.store (timeline);
+    else if (previewMode.load (std::memory_order_relaxed)) playhead.store (previewPos.load (std::memory_order_relaxed));
+    else if (hasTime) playhead.store (hostTime);
 
     juce::MidiBuffer midiOut;
     for (int start = 0; start < total; start += maxBlock)
@@ -495,7 +513,7 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
 
     int scCh = 0;
     const float* sc[2] = { nullptr, nullptr };
-    if (getBusCount (true) > 1 && getBus (true, 1)->isEnabled())
+    if (getBusCount (true) > 1 && getBus (true, 1)->isEnabled() && getMainBusNumInputChannels() > 0)   // else it is the main input
     {
         auto scBus = getBusBuffer (buffer, true, 1);
         scCh = juce::jmin (2, scBus.getNumChannels());
@@ -595,6 +613,7 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
             // start a little before where playback first started, so an earlier restart is still covered
             origin = std::max<int64_t> (0, chunkTimeline - (int64_t) (10.0 * currentRate));
             if (origin > chunkTimeline) origin = chunkTimeline;
+            capture.firstIndex.store (chunkTimeline - origin, std::memory_order_relaxed);
             capture.origin.store (origin, std::memory_order_release);
         }
         const int64_t idx = chunkTimeline - origin;
@@ -834,26 +853,31 @@ void ThrumaProcessor::publishTriggers()
 
 void ThrumaProcessor::allocateCapture()
 {
-    // called from prepareToPlay / configureEngines, i.e. never concurrently with processBlock
+    // called from prepareToPlay / configureEngines, i.e. never concurrently with processBlock. Toggling Debleed
+    // or the reference re-runs this: what was recorded or analysed must survive, so it only grows.
     const bool needRef = isSidechainConnected() || configuredLinked;
-    const auto cap = (int64_t) (kCaptureSeconds * currentRate);
-    if (capture.capacity == cap && capture.hasRef == needRef && std::abs (capture.sampleRate - currentRate) < 0.5) return;
+    const bool rateChanged = capture.capacity == 0 || std::abs (capture.sampleRate - currentRate) >= 0.5;
+    const auto cap = std::max ((int64_t) (kCaptureSeconds * currentRate), rateChanged ? (int64_t) 0 : capture.capacity);
+    if (! rateChanged && capture.capacity == cap && (capture.hasRef || ! needRef)) return;
 
+    if (rateChanged)
+    {
+        capture.origin.store (-1);
+        capture.length.store (0);
+        for (auto& d : capture.data) { d.clear(); d.shrink_to_fit(); }
+        envLevel.clear(); envThreshold.clear(); beatMap.clear();
+        capture.hasRef = false;
+        lastLearnLength = 0;
+    }
     capture.capacity = cap;
     capture.sampleRate = currentRate;
-    capture.hasRef = needRef;
-    capture.data[0].assign ((size_t) cap, 0.0f);
+    capture.hasRef = capture.hasRef || needRef;
+    capture.data[0].resize ((size_t) cap, 0.0f);
     for (int c = 1; c < CaptureBuffer::kChannels; ++c)
-    {
-        if (needRef) capture.data[(size_t) c].assign ((size_t) cap, 0.0f);
-        else { capture.data[(size_t) c].clear(); capture.data[(size_t) c].shrink_to_fit(); }
-    }
-    capture.origin.store (-1);
-    capture.length.store (0);
-    envLevel.assign ((size_t) (cap / kEnvBin + 1), -180.0f);
-    envThreshold.assign ((size_t) (cap / kEnvBin + 1), -180.0f);
-    beatMap.assign ((size_t) (cap / kBeatBin + 2), std::numeric_limits<double>::quiet_NaN());
-    lastLearnLength = 0;
+        if (capture.hasRef) capture.data[(size_t) c].resize ((size_t) cap, 0.0f);
+    envLevel.resize ((size_t) (cap / kEnvBin + 1), -180.0f);
+    envThreshold.resize ((size_t) (cap / kEnvBin + 1), -180.0f);
+    beatMap.resize ((size_t) (cap / kBeatBin + 2), std::numeric_limits<double>::quiet_NaN());
 }
 
 void ThrumaProcessor::clearCapture()
@@ -1040,6 +1064,8 @@ void ThrumaProcessor::installOfflineAudio (std::shared_ptr<const std::vector<flo
     offlineAudio = std::move (audio);
     offlineOrigin = origin;
     offlineSource = src;
+    previewMode.store (src == OfflineSource::File);
+    if (src == OfflineSource::File) previewPos.store (std::max<int64_t> (0, origin));
     offlineName = name;
     analysedKey = {};
     reanalyseAt = 0.0;
@@ -1049,6 +1075,7 @@ void ThrumaProcessor::installOfflineAudio (std::shared_ptr<const std::vector<flo
 void ThrumaProcessor::dropOfflineAudio()
 {
     previewPlaying.store (false);
+    previewMode.store (false);
     offlineAudio.reset();
     offlineSource = OfflineSource::None;
     offlineName = {};
@@ -1105,6 +1132,8 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
                 {
                     cap.capacity = len;
                     cap.data[0].assign ((size_t) len, 0.0f);
+                    for (int c = 1; c < CaptureBuffer::kChannels; ++c)
+                        if (cap.hasRef) cap.data[(size_t) c].assign ((size_t) len, 0.0f);
                     self->envLevel.assign ((size_t) (len / kEnvBin + 1), -180.0f);
                     self->envThreshold.assign ((size_t) (len / kEnvBin + 1), -180.0f);
                     self->beatMap.assign ((size_t) (len / kBeatBin + 2), std::numeric_limits<double>::quiet_NaN());
@@ -1113,6 +1142,7 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
                     std::fill (self->beatMap.begin(), self->beatMap.end(), std::numeric_limits<double>::quiet_NaN());
                 std::copy (audio->begin(), audio->end(), cap.data[0].begin());
                 cap.origin.store (origin);
+                cap.firstIndex.store (0);
                 cap.length.store (len);
                 self->suspendProcessing (false);
             }

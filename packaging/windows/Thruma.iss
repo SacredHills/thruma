@@ -15,7 +15,7 @@
 AppId={{6B0C1E2A-7F4D-4B8E-9C61-5A3E2D7F9B10}
 AppName=Thruma
 AppVersion={#AppVersion}
-AppPublisher=SacredHills
+AppPublisher=Sacred Hills Studio
 AppPublisherURL=https://github.com/SacredHills/thruma
 DefaultDirName={autopf}\Thruma
 DisableDirPage=yes

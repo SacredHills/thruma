@@ -19,6 +19,7 @@ namespace colours
     const juce::Colour selection   { 0xffffffff };
     const juce::Colour danger      { 0xffd8d8d8 };   // missing files, clipping, mute
     const juce::Colour record      { 0xffffffff };   // playhead
+    const juce::Colour hitGlow     { 0xff45c7b8 };   // PLAYER: drums / pads lighting up when hit (the one colour)
 }
 
 class ThrumaLookAndFeel : public juce::LookAndFeel_V4

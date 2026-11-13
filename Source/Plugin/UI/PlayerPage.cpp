@@ -184,10 +184,10 @@ void PlayerPage::paint (juce::Graphics& g)
         {
             for (int k = 3; k >= 1; --k)   // soft glow
             {
-                g.setColour (colours::accent.withAlpha (0.12f * gl));
+                g.setColour (colours::hitGlow.withAlpha (0.12f * gl));
                 g.strokePath (path, juce::PathStrokeType (6.0f * (float) k));
             }
-            g.setColour (colours::accent.withAlpha (0.38f * gl));
+            g.setColour (colours::hitGlow.withAlpha (0.38f * gl));
             g.fillPath (path);
         }
         if (hot)
@@ -213,7 +213,7 @@ void PlayerPage::paint (juce::Graphics& g)
         const auto m = km.getSlot (slot);
         const bool empty = m.isEmpty() && m.name.isEmpty();
         const float gl = glow[(size_t) slot];
-        g.setColour (colours::panelRaised.interpolatedWith (colours::accent, 0.55f * gl));
+        g.setColour (colours::panelRaised.interpolatedWith (colours::hitGlow, 0.55f * gl));
         g.fillRoundedRectangle (b, 8.0f);
         g.setColour (slot == dropSlot ? colours::trigger : colours::outline);
         if (empty)

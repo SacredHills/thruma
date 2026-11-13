@@ -34,14 +34,15 @@ public:
     std::function<void (const juce::File&)> onMidiFileDropped;
     std::function<void (const juce::String&)> onMessage;
 
+    double xToPos (float x) const { return viewStart + (double) x * spp; }
+    float posToX (double pos) const { return (float) ((pos - viewStart) / spp); }
+
 private:
     void timerCallback() override;
     void scrollBarMoved (juce::ScrollBar*, double start) override;
 
     juce::Rectangle<int> audioArea() const;
     juce::Rectangle<int> midiArea() const;
-    double xToPos (float x) const { return viewStart + (double) x * spp; }
-    float posToX (double pos) const { return (float) ((pos - viewStart) / spp); }
     float dbToY (float db) const;
     float yToDb (float y) const;
     float velToY (float v) const;

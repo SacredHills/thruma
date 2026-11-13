@@ -160,7 +160,10 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
     // When replacement is off only MIDI-triggered voices can sound, at unity, on top of the untouched dry signal.
     // An empty kit slot never mutes the original: replacing with nothing would silence the track.
     const bool slotEmpty = kit == nullptr || kit->slots[(size_t) std::clamp (detectedSlot, 0, kNumInstruments - 1)].isEmpty();
-    if (! settings.enabled || (slotEmpty && settings.source != TriggerSource::MidiOnly)) { dryT = 1.0f; wetT = 1.0f; }
+    // Blend always sets the samples' level (also MIDI-played ones); it only keeps the original at full level when
+    // the drum being replaced has no samples to replace it with.
+    if (! settings.enabled) { dryT = 1.0f; wetT = 1.0f; }
+    else if (slotEmpty && settings.source != TriggerSource::MidiOnly) { dryT = 1.0f; wetT = blend; }
     else if (settings.mode == ReplaceMode::Layer)  { dryT = 1.0f; wetT = blend; }
     else                                           { dryT = 1.0f - blend; wetT = blend; }
     const float outT = dbToGain (settings.outputDb);

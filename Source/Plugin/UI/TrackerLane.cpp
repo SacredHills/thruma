@@ -279,7 +279,7 @@ void TrackerLane::paint (juce::Graphics& g)
     }
     if (proc.isTransportPlaying() || proc.getOfflineSource() != ThrumaProcessor::OfflineSource::None || proc.canControlHostTransport())
     {
-        g.setColour (proc.isTransportPlaying() ? colours::record : colours::record.withAlpha (0.45f));
+        g.setColour (proc.isTransportPlaying() ? colours::record : colours::record.withAlpha (0.8f));
         const float x = posToX ((double) proc.getPlayheadPosition());
         g.fillPath ([x] { juce::Path p; p.addTriangle (x - 5.0f, 0.0f, x + 5.0f, 0.0f, x, 8.0f); return p; }());
         g.drawVerticalLine ((int) x, (float) audio.getY(), (float) midi.getBottom());
@@ -356,8 +356,10 @@ void TrackerLane::mouseDown (const juce::MouseEvent& e)
     if (e.position.y < (float) kRulerH)
     {
         // ruler: play from here
-        if (! proc.locateTo ((int64_t) std::max (0.0, xToPos (e.position.x))) && onMessage)
-            onMessage ("This DAW does not let plugins move its play position - click in the DAW's timeline instead.");
+        const auto target = (int64_t) std::max (0.0, xToPos (e.position.x));
+        const auto why = proc.locateTo (target);
+        if (onMessage)
+            onMessage (why.isNotEmpty() ? why : "Play from " + juce::String ((double) target / juce::jmax (1.0, proc.getCurrentSampleRate()), 1) + " s");
         repaint();
         return;
     }

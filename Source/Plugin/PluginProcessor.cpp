@@ -450,10 +450,9 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     bool playing = newMode != 0;
     int64_t timeline = newMode == 1 ? hostTime : internalTimeline;
     bool previewing = false;
-    if (previewPlaying.load (std::memory_order_relaxed) && ! (hostPlaying || advancing))
+    // imported audio is the drum ("the original") wherever it plays: inside Thruma, or with the DAW's song
+    auto playImported = [&] (int64_t from)
     {
-        // in-plugin playback of imported audio: it replaces the input, on its own timeline
-        const int64_t pp = previewPos.load (std::memory_order_relaxed);
         const auto origin = capture.origin.load (std::memory_order_relaxed);
         const auto len = capture.length.load (std::memory_order_relaxed);
         const int outCh = juce::jmin (buffer.getNumChannels(), juce::jmax (1, getMainBusNumOutputChannels()));
@@ -462,18 +461,31 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             auto* d = buffer.getWritePointer (c);
             for (int i = 0; i < total; ++i)
             {
-                const int64_t k = pp + i - origin;
+                const int64_t k = from + i - origin;
                 d[i] = (origin >= 0 && k >= 0 && k < len) ? capture.data[0][(size_t) k] : 0.0f;
             }
         }
+    };
+    if (previewPlaying.load (std::memory_order_relaxed) && ! (hostPlaying || advancing))
+    {
+        // in-plugin playback of imported audio, on its own timeline
+        const int64_t pp = previewPos.load (std::memory_order_relaxed);
+        const auto origin = capture.origin.load (std::memory_order_relaxed);
+        const auto len = capture.length.load (std::memory_order_relaxed);
+        playImported (pp);
         previewing = true;
         playing = true;
         timeline = pp;
         previewPos.store (pp + total, std::memory_order_relaxed);
         if (origin < 0 || pp + total >= origin + len) previewPlaying.store (false);
     }
-    else if (previewPlaying.load (std::memory_order_relaxed))
-        previewPlaying.store (false);   // the host started playing: it takes over
+    else
+    {
+        if (previewPlaying.load (std::memory_order_relaxed))
+            previewPlaying.store (false);   // the host started playing: it takes over
+        if (previewMode.load (std::memory_order_relaxed) && newMode == 1)
+            playImported (hostTime);        // the imported drum plays with the song (it starts at the song start)
+    }
     blockHasBeat = ! previewing && newMode == 1 && pos.hasValue() && pos->getPpqPosition().hasValue() && pos->getBpm().hasValue() && *pos->getBpm() > 1.0;
     if (blockHasBeat)
     {
@@ -1180,21 +1192,25 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
     });
 }
 
-bool ThrumaProcessor::locateTo (int64_t pos)
+juce::String ThrumaProcessor::locateTo (int64_t pos)
 {
     pos = std::max<int64_t> (0, pos);
-    if (offlineSource == OfflineSource::File)
+    const bool hostRolling = isTransportPlaying() && ! previewPlaying.load();
+    if (offlineSource == OfflineSource::File && ! hostRolling)
     {
         previewPos.store (pos);
         playhead.store (pos);
-        return true;
+        return {};
     }
     if (hostBridge.locate (pos))
     {
         playhead.store (pos);
-        return true;
+        return {};
     }
-    return false;
+    if (offlineSource == OfflineSource::File)
+        return "Your DAW is playing, so Thruma follows the DAW and can't move it. Stop the DAW, click here, and press Play in Thruma.";
+    return "This DAW doesn't let plugins move its play position. Click in the DAW's timeline instead "
+           "(or Import Audio to play the drum inside Thruma).";
 }
 
 void ThrumaProcessor::togglePlay()

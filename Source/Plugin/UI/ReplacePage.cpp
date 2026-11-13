@@ -206,7 +206,7 @@ void ReplacePage::timerCallback()
     if (proc.getMidiFileName().isNotEmpty())
         s << "MIDI file: " << proc.getMidiFileName() << " (" << proc.getMidiFileNoteCount() << " notes) plays the kit with the song.\n\n";
     if (files == 0) s << "No samples for " << getInstrumentName ((Instrument) currentSlot()) << " yet: drop WAV files here or use SAMPLES. "
-                         "The original drum plays until then.";
+                         "The original drum plays unchanged until then (Blend then only sets the level of MIDI-played samples).";
     else s << files << " samples, " << (int) slot.layers.size() << " velocity layers";
     if (message.isNotEmpty() && juce::Time::getMillisecondCounter() - messageTime < 6000)
         s = message + "\n\n" + s;

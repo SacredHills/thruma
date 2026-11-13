@@ -129,8 +129,8 @@ public:
     int getOfflineMessageCount() const { return offlineMessageCount; }
 
     /** Ruler click: play from this timeline position (in-plugin preview of imported audio, or the host's
-        transport where the host allows it). False if neither is possible. */
-    bool locateTo (int64_t timelinePos);
+        transport where the host allows it). Returns an explanation when it cannot. */
+    juce::String locateTo (int64_t timelinePos);   // empty = done, else why not
     /** Play / stop: the imported audio inside the plugin, otherwise the host transport (where allowed). */
     bool canTogglePlay() const { return offlineSource == OfflineSource::File || canControlHostTransport(); }
     void togglePlay();

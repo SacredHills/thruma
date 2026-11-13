@@ -1,6 +1,7 @@
 // Dev harness through the real processor: MIDI-file playback on the DAW beat grid, MIDI with no audio input,
 // in-plugin preview of imported audio, automatic re-analysis.
 #include "../../Source/Plugin/PluginProcessor.h"
+#include "../../Source/Plugin/UI/TrackerLane.h"
 #include <random>
 using namespace thruma;
 
@@ -133,9 +134,10 @@ int main()
         check (proc->getOfflineSource() == ThrumaProcessor::OfflineSource::File && proc->isFinalized(), "imported audio is finalized and can be previewed");
 
         ph.playing = false; ph.pos = 0;
-        check (proc->locateTo (48000 * 2), "ruler click sets the preview position");
-        proc->togglePlay();
         juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        buf.clear(); proc->processBlock (buf, midi);   // the DAW has stopped
+        check (proc->locateTo (48000 * 2).isEmpty(), "ruler click sets the preview position");
+        proc->togglePlay();
         float pk = 0;
         for (int blk = 0; blk < 94; ++blk) { buf.clear(); midi.clear(); proc->processBlock (buf, midi); pk = std::max (pk, buf.getMagnitude (0, 0, 512)); }
         check (pk > 0.3f, "preview plays (replacement samples on the imported drum) while the DAW is stopped: peak " + juce::String (pk, 2));
@@ -179,7 +181,7 @@ int main()
         }
         check (p2->getOfflineSource() == ThrumaProcessor::OfflineSource::HostTrack, "Analyze read the whole track from the host: " + result);
         check (good >= 19 && (int) p2->getTriggers().size() <= 21, "whole-track analysis found the hits: " + juce::String (good) + " on time of " + juce::String ((int) p2->getTriggers().size()));
-        check (p2->locateTo (48000 * 4) && fakeLocated == 48000 * 4, "ruler click moves the host's play position");
+        check (p2->locateTo (48000 * 4).isEmpty() && fakeLocated == 48000 * 4, "ruler click moves the host's play position");
         p2->togglePlay();
         check (fakePlaying == 1, "Play starts the host transport");
     }
@@ -263,6 +265,122 @@ int main()
         check (b0.first > 0.99, "blend 0 %: output is the original (correlation " + juce::String (b0.first, 3) + ")");
         check (b1.first < 0.2, "blend 100 %: the original is gone (correlation " + juce::String (b1.first, 3) + ")");
         check (bh.first > b1.first + 0.2 && bh.first < b0.first - 0.05, "blend 50 %: in between (correlation " + juce::String (bh.first, 3) + ")");
+    }
+
+    // ---- 5b) blend also sets MIDI-played samples when the tracked drum (Snare) has no samples ----
+    {
+        std::unique_ptr<ThrumaProcessor> p7 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH ph7; p7->setPlayHead (&ph7); p7->prepareToPlay (48000.0, 512);
+        p7->getKitManager().assignFiles ((int) Instrument::Kick, { click });
+        p7->rebuildKit();
+        auto peakAt = [&] (float blend)
+        {
+            p7->apvts.getParameter (ids::repBlend)->setValueNotifyingHost (blend);
+            pump (50);
+            juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+            float pk = 0;
+            for (int blk = 0; blk < 12; ++blk)
+            {
+                buf.clear(); midi.clear(); ph7.pos += 512;
+                if (blk == 1) midi.addEvent (juce::MidiMessage::noteOn (10, 36, (juce::uint8) 127), 50);
+                p7->processBlock (buf, midi);
+                pk = std::max (pk, buf.getMagnitude (0, 0, 512));
+            }
+            return pk;
+        };
+        const float full = peakAt (1.0f), quarter = peakAt (0.25f);
+        check (full > 0.3f && std::abs (quarter / full - 0.25f) < 0.03f, "Blend scales MIDI-played samples with no snare samples loaded: "
+               + juce::String (quarter, 3) + " vs " + juce::String (full, 3));
+    }
+
+    // ---- 5c) imported audio through the real editor: ruler click while playing in Thruma, Blend while playing ----
+    {
+        std::unique_ptr<ThrumaProcessor> p8 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH ph8; ph8.playing = false; ph8.pos = 0; p8->setPlayHead (&ph8); p8->prepareToPlay (48000.0, 512);
+        auto tone = writeWav ("thruma_tone2.wav", [] (int i) { return 0.8f * std::sin ((float) i * 0.05f) * std::exp (-(float) i / 4000.0f); }, 24000, 48000.0);
+        p8->getKitManager().assignFiles ((int) Instrument::Snare, { tone });
+        p8->rebuildKit();
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p8->createEditorIfNeeded());
+        ed->setSize (1080, 760);
+        std::function<ui::TrackerLane* (juce::Component*)> findLane = [&] (juce::Component* c) -> ui::TrackerLane*
+        {
+            if (auto* l = dynamic_cast<ui::TrackerLane*> (c)) return l;
+            for (auto* ch : c->getChildren()) if (auto* l = findLane (ch)) return l;
+            return nullptr;
+        };
+        auto* lane = findLane (ed.get());
+        check (lane != nullptr && lane->isShowing() == lane->isShowing(), "editor has the track lane");
+
+        std::mt19937 rng (5); std::uniform_real_distribution<float> u (-1, 1);
+        auto wav = writeWav ("thruma_import2.wav", [&] (int i) { const double t = std::fmod ((double) i / 48000.0, 0.5); return (float) (0.5 * std::exp (-t / 0.04)) * u (rng); },
+                             48000 * 20, 48000.0);
+        juce::String result;
+        p8->importAudio (wav, [&] (const juce::String& m) { result = m; });
+        for (int i = 0; i < 100 && result.isEmpty(); ++i) pump (50);
+        pump (300);
+        p8->togglePlay();
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        for (int blk = 0; blk < 40; ++blk) { buf.clear(); p8->processBlock (buf, midi); }
+        pump (100);
+
+        // a real mouse click on the ruler, 12 s into the song
+        auto* lc = static_cast<juce::Component*> (lane);
+        auto findX = [&] (double pos) { for (int x = 0; x < lc->getWidth(); ++x) if (lane->xToPos ((float) x) >= pos) return x; return -1; };
+        juce::ignoreUnused (findX);
+        lane->zoomToFit();   // what Import Audio does in the editor
+        const int x = lc->getWidth() * 4 / 5;
+        const double target = lane->xToPos ((float) x);
+        std::printf ("  (lane shows %.2f .. %.2f s, clicking %.2f s)\n", lane->xToPos (0) / 48000.0, lane->xToPos ((float) lc->getWidth()) / 48000.0, target / 48000.0);
+        if (x >= 0)
+        {
+            auto src = juce::Desktop::getInstance().getMainMouseSource();
+            const juce::Point<float> pt ((float) x, 8.0f);
+            const auto now = juce::Time::getCurrentTime();
+            juce::MouseEvent e (src, pt, juce::ModifierKeys::leftButtonModifier, 1.0f, 0, 0, 0, 0, lc, lc, now, pt, now, 1, false);
+            lc->mouseDown (e);
+            lc->mouseUp (e);
+        }
+        for (int blk = 0; blk < 4; ++blk) { buf.clear(); p8->processBlock (buf, midi); }
+        pump (100);
+        const auto head = p8->getPlayheadPosition();
+        check (p8->isPreviewPlaying() && std::abs ((double) head - target) < 48000 / 4, "ruler click during in-plugin playback jumps there: playhead "
+               + juce::String ((double) head / 48000.0, 2) + " s");
+
+        auto corrAt = [&] (float blend)
+        {
+            p8->apvts.getParameter (ids::repBlend)->setValueNotifyingHost (blend);
+            pump (60);
+            p8->locateTo (48000 * 2);
+            double xy = 0, xx = 0, yy = 0;
+            const int L = p8->getLatencySamples();
+            std::vector<float> outv;
+            for (int blk = 0; blk < 300; ++blk) { buf.clear(); p8->processBlock (buf, midi); for (int i = 0; i < 512; ++i) outv.push_back (buf.getSample (0, i)); }
+            // compare with the imported audio at the same song positions
+            const auto& cap = p8->getCapture();
+            for (size_t i = 48000; i < outv.size(); ++i)
+            {
+                const int64_t songPos = 48000 * 2 + (int64_t) i - L;
+                const float d = cap.data[0][(size_t) songPos];
+                xy += d * outv[i]; xx += d * d; yy += outv[i] * outv[i];
+            }
+            return xy / std::sqrt (xx * yy + 1e-12);
+        };
+        const double c0 = corrAt (0.0f), c1 = corrAt (1.0f);
+        // the DAW playing (instrument track, silent input): the imported drum is still the original for Blend
+        p8->togglePlay();
+        p8->apvts.getParameter (ids::repBlend)->setValueNotifyingHost (0.0f);
+        pump (60);
+        ph8.playing = true; ph8.pos = 48000 * 3;
+        float pkHost = 0;
+        for (int blk = 0; blk < 100; ++blk) { buf.clear(); p8->processBlock (buf, midi); ph8.pos += 512; pkHost = std::max (pkHost, buf.getMagnitude (0, 0, 512)); }
+        check (pkHost > 0.3f, "DAW playing with silent input: the imported drum plays at Blend 0 % (peak " + juce::String (pkHost, 2) + ")");
+        fakeLocated = -1;
+        const auto why = p8->locateTo (48000);
+        check (why.isNotEmpty() || fakeLocated == 48000, "ruler click while the DAW plays: moves a DAW that allows it (RAVENYR), else explains");
+        ph8.playing = false; buf.clear(); p8->processBlock (buf, midi);
+        check (c0 > 0.98, "imported audio, Blend 0 %: the original (correlation " + juce::String (c0, 3) + ")");
+        check (c1 < 0.3, "imported audio, Blend 100 %: samples only (correlation " + juce::String (c1, 3) + ")");
+        ed.reset();
     }
 
     // ---- 6) stopped host: the playhead stays put ----

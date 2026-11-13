@@ -140,6 +140,8 @@ void ThrumaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     monoBuf.assign ((size_t) maxBlock, 0.0f);
     auditionBuf.assign ((size_t) maxBlock, 0.0f);
     previewEngine.prepare (sampleRate);
+    previewEngine.setHitMonitor (&hitMonitor);
+    replace.getSampleEngine().setHitMonitor (&hitMonitor);
     numPending = 0;
 
     configureEngines();
@@ -795,6 +797,18 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
         if (p->object->sample != nullptr)
             previewEngine.triggerSample (p->object->sample.get(), 1, p->seq, p->object->gain, 0);
     }
+    // Player / pads: auditions play the kit directly (not scaled by Blend)
+    if (kit != nullptr)
+    {
+        const auto rd = auditionFifo.read (auditionFifo.getNumReady());
+        auto play = [&] (int start, int size)
+        {
+            for (int i = start; i < start + size; ++i)
+                previewEngine.trigger (*kit, kitSeq, (Instrument) auditionQueue[(size_t) i].slot, auditionQueue[(size_t) i].velocity, 0, rs.playback);
+        };
+        play (rd.startIndex1, rd.blockSize1);
+        play (rd.startIndex2, rd.blockSize2);
+    }
     previewEngine.render (ch, nch, n);
 
     {
@@ -1275,6 +1289,13 @@ int ThrumaProcessor::getMidiFileNoteCount() const
 {
     const auto* sq = midiSeqPublisher.getLatest();
     return sq != nullptr ? (int) sq->notes.size() : 0;
+}
+
+void ThrumaProcessor::auditionSlot (int slot, float velocity)
+{
+    if (slot < 0 || slot >= kNumKitSlots) return;
+    const auto wr = auditionFifo.write (1);
+    if (wr.blockSize1 > 0) auditionQueue[(size_t) wr.startIndex1] = { slot, juce::jlimit (0.05f, 1.0f, velocity) };
 }
 
 void ThrumaProcessor::previewSample (const juce::File& file)

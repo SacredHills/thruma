@@ -26,6 +26,11 @@ enum class Instrument : int
 };
 
 constexpr int kNumInstruments = static_cast<int> (Instrument::Count);
+/** Extra sample pads after the drums (cowbell, a second crash, stacks, FX...): MIDI / pad-triggered only. */
+constexpr int kNumPads = 16;
+/** Kit slots: the drums (0 .. kNumInstruments-1), then the pads. */
+constexpr int kNumKitSlots = kNumInstruments + kNumPads;
+constexpr bool isPadSlot (int slot) noexcept { return slot >= kNumInstruments && slot < kNumKitSlots; }
 
 /** Tuned defaults for detecting one drum type in its close mic.
     These are the "instrument-specific detection profiles". All times in ms,

@@ -48,7 +48,7 @@ void ReplaceEngine::setSettings (const ReplaceSettings& s) noexcept
 
 void ReplaceEngine::scheduleHit (const Kit* kit, uint64_t kitSeq, int slot, float velocity, int offset) noexcept
 {
-    if (kit == nullptr || slot < 0 || slot >= kNumInstruments) return;
+    if (kit == nullptr || slot < 0 || slot >= kNumKitSlots) return;
     samples.trigger (*kit, kitSeq, (Instrument) slot, velocity, offset, settings.playback);
 }
 

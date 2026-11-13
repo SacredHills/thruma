@@ -48,6 +48,7 @@ LayerRow::LayerRow (SamplesPage& owner, int layerIndex) : page (owner), layer (l
     for (int i = 0; i < L.files.size(); ++i)
     {
         const auto f = L.files[i];
+        hashes.push_back ((uint64_t) std::hash<std::string>{} (f.getFullPathName().toStdString()));
         auto* b = chips.add (new juce::TextButton (f.getFileNameWithoutExtension()));
         b->setTooltip (f.getFullPathName() + (f.existsAsFile() ? "\nClick to preview, Shift-click to remove." : "\nMISSING FILE"));
         if (! f.existsAsFile()) b->setColour (juce::TextButton::buttonColourId, colours::danger.withAlpha (0.4f));
@@ -65,6 +66,45 @@ LayerRow::LayerRow (SamplesPage& owner, int layerIndex) : page (owner), layer (l
         b->setTriggeredOnMouseDown (false);
         addAndMakeVisible (b);
     }
+}
+
+void LayerRow::flash (uint64_t sampleHash, float velocity)
+{
+    for (size_t i = 0; i < hashes.size() && i < (size_t) chips.size(); ++i)
+        if (hashes[i] == sampleHash)
+        {
+            flashIdx = (int) i;
+            flashLevel = 1.0f;
+            flashVel = velocity;
+            repaint();
+            return;
+        }
+}
+
+bool LayerRow::decay()
+{
+    if (flashLevel <= 0.0f) return false;
+    flashLevel = juce::jmax (0.0f, flashLevel - 0.06f);
+    repaint();
+    return flashLevel > 0.0f;
+}
+
+void LayerRow::paintOverChildren (juce::Graphics& g)
+{
+    if (flashIdx < 0 || flashIdx >= chips.size()) return;
+    const auto b = chips[flashIdx]->getBounds().toFloat().expanded (2.0f);
+    // the last-played sample keeps a thin outline; a fresh hit lights it up
+    g.setColour (colours::accent.withAlpha (0.25f + 0.55f * flashLevel));
+    g.drawRoundedRectangle (b, 5.0f, 2.0f);
+    if (flashLevel > 0.0f)
+    {
+        g.setColour (colours::accent.withAlpha (0.35f * flashLevel));
+        g.fillRoundedRectangle (b, 5.0f);
+    }
+    g.setColour (colours::accent);
+    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    g.drawText ("PLAYED  vel " + juce::String (juce::roundToInt (flashVel * 127.0f)),
+                juce::Rectangle<int> (getWidth() - 136, (int) b.getY(), 120, (int) b.getHeight()), juce::Justification::centredRight);
 }
 
 void LayerRow::paint (juce::Graphics& g)
@@ -95,7 +135,7 @@ void LayerRow::resized()
     for (auto* c : chips)
     {
         const int w = juce::jlimit (60, 180, juce::GlyphArrangement::getStringWidthInt (juce::FontOptions (13.0f), c->getButtonText()) + 20);
-        if (x + w > r.getRight() && x > r.getX()) { x = r.getX(); y += 28; }
+        if (x + w > r.getRight() - 130 && x > r.getX()) { x = r.getX(); y += 28; }   // right: "PLAYED"
         c->setBounds (x, y, w, 24);
         x += w + 6;
     }
@@ -226,7 +266,56 @@ SamplesPage::SamplesPage (ThrumaProcessor& p) : proc (p)
     addAndMakeVisible (hint);
 
     for (auto* panel : { &browserPanel, &kitPanel, &detailPanel }) panel->toBack();
+
+    // pads can be renamed (double-click the title)
+    detailTitle.onTextChange = [this]
+    {
+        if (! isPadSlot (selectedInstrument)) return;
+        proc.getKitManager().setSlotName (selectedInstrument, detailTitle.getText());
+        instrumentList.repaint();
+    };
+    for (int i = 0; i < kNumKitSlots; ++i) seenHits[(size_t) i] = proc.getHitMonitor().slots[(size_t) i].count.load();
     refreshDetail();
+    startTimerHz (30);
+}
+
+int SamplesPage::getNumRows()
+{
+    return kNumInstruments + juce::jmin (kNumPads, proc.getKitManager().getNumUsedPads() + 1);   // + one empty pad
+}
+
+void SamplesPage::selectSlot (int slot)
+{
+    selectedInstrument = juce::jlimit (0, kNumKitSlots - 1, slot);
+    instrumentList.updateContent();
+    instrumentList.selectRow (selectedInstrument);
+    refreshDetail();
+}
+
+void SamplesPage::timerCallback()
+{
+    if (! isVisible()) return;   // the hidden tab skips the work
+    bool listDirty = false;
+    const auto& hm = proc.getHitMonitor();
+    for (int i = 0; i < kNumKitSlots; ++i)
+    {
+        const auto c = hm.slots[(size_t) i].count.load (std::memory_order_acquire);
+        if (c != seenHits[(size_t) i])
+        {
+            seenHits[(size_t) i] = c;
+            rowFlash[(size_t) i] = 1.0f;
+            listDirty = true;
+            if (i == selectedInstrument)
+                for (auto* r : rows) r->flash (hm.slots[(size_t) i].sampleHash.load(), hm.slots[(size_t) i].velocity.load());
+        }
+        else if (rowFlash[(size_t) i] > 0.0f)
+        {
+            rowFlash[(size_t) i] = juce::jmax (0.0f, rowFlash[(size_t) i] - 0.08f);
+            listDirty = true;
+        }
+    }
+    for (auto* r : rows) r->decay();
+    if (listDirty) instrumentList.repaint();
 }
 
 SamplesPage::~SamplesPage()
@@ -287,7 +376,7 @@ void SamplesPage::resized()
     {
         // height grows with the number of sample chips
         const int chips = juce::jmax (1, row->getNumChildComponents() - 4);
-        const int perLine = juce::jmax (1, (w - 16) / 120);
+        const int perLine = juce::jmax (1, (w - 146) / 120);
         const int h = 46 + ((chips + perLine - 1) / perLine) * 28;
         row->setBounds (0, y, w, h);
         y += h + 8;
@@ -305,9 +394,21 @@ void SamplesPage::paintListBoxItem (int row, juce::Graphics& g, int w, int h, bo
         g.setColour (colours::accent.withAlpha (0.2f));
         g.fillRoundedRectangle (2.0f, 1.0f, (float) w - 4.0f, (float) h - 2.0f, 4.0f);
     }
+    if (const float fl = row < kNumKitSlots ? rowFlash[(size_t) row] : 0.0f; fl > 0.0f)
+    {
+        g.setColour (colours::accent.withAlpha (0.3f * fl));
+        g.fillRoundedRectangle (2.0f, 1.0f, (float) w - 4.0f, (float) h - 2.0f, 4.0f);
+    }
+    if (row == kNumInstruments)
+    {
+        g.setColour (colours::outline);
+        g.drawHorizontalLine (0, 6.0f, (float) w - 6.0f);
+    }
     g.setColour (files > 0 ? colours::text : colours::textDim);
     g.setFont (juce::FontOptions (14.0f));
-    g.drawText (getInstrumentName ((Instrument) row), 10, 0, w - 60, h, juce::Justification::centredLeft);
+    auto name = proc.getKitManager().getSlotName (row);
+    if (isPadSlot (row) && files == 0 && slot.name.isEmpty()) name = "+ " + name;
+    g.drawText (name, 10, 0, w - 60, h, juce::Justification::centredLeft);
     g.setColour (colours::textDim);
     g.setFont (juce::FontOptions (12.0f));
     g.drawText (files > 0 ? juce::String (files) : juce::String ("-"), w - 50, 0, 40, h, juce::Justification::centredRight);
@@ -372,6 +473,7 @@ void SamplesPage::kitChanged()
     const auto missing = proc.getMissingSampleFiles();
     if (! missing.isEmpty())
         hint.setText (juce::String (missing.size()) + " sample file(s) missing - they are shown in red.", juce::dontSendNotification);
+    instrumentList.updateContent();
     instrumentList.repaint();
     refreshDetail();
 }
@@ -379,9 +481,11 @@ void SamplesPage::kitChanged()
 void SamplesPage::refreshDetail()
 {
     kitName.setText (proc.getKitManager().getKitName(), juce::dontSendNotification);
-    detailTitle.setText (getInstrumentName ((Instrument) selectedInstrument), juce::dontSendNotification);
+    detailTitle.setText (proc.getKitManager().getSlotName (selectedInstrument), juce::dontSendNotification);
+    detailTitle.setEditable (false, isPadSlot (selectedInstrument), false);
+    detailTitle.setTooltip (isPadSlot (selectedInstrument) ? "Double-click to rename this pad" : juce::String());
     const auto slot = proc.getKitManager().getSlot (selectedInstrument);
-    midiNote.setValue (slot.midiNote, juce::dontSendNotification);
+    midiNote.setValue (juce::jmax (0, slot.midiNote), juce::dontSendNotification);
     rrMode.setSelectedId (slot.rrMode == RoundRobinMode::Random ? 2 : 1, juce::dontSendNotification);
 
     rows.clear();

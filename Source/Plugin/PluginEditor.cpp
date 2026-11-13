@@ -4,13 +4,13 @@ namespace thruma
 {
 
 ThrumaEditor::ThrumaEditor (ThrumaProcessor& p)
-    : AudioProcessorEditor (p), proc (p), replacePage (p), debleedPage (p), samplesPage (p)
+    : AudioProcessorEditor (p), proc (p), playerPage (p), replacePage (p), debleedPage (p), samplesPage (p)
 {
     setLookAndFeel (&lnf);
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
 
-    const char* names[] = { "DEBLEED", "REPLACE", "SAMPLES" };
-    for (int i = 0; i < 3; ++i)
+    const char* names[] = { "DEBLEED", "REPLACE", "SAMPLES", "PLAYER" };
+    for (int i = 0; i < kNumTabs; ++i)
     {
         auto& t = tabs[(size_t) i];
         t.setButtonText (names[i]);
@@ -21,6 +21,9 @@ ThrumaEditor::ThrumaEditor (ThrumaProcessor& p)
     addChildComponent (replacePage);
     addChildComponent (debleedPage);
     addChildComponent (samplesPage);
+    addChildComponent (playerPage);
+    playerPage.onEditSlot = [this] (int slot) { showTab (2); samplesPage.selectSlot (slot); };
+    playerPage.onKitChanged = [this] { samplesPage.selectSlot (samplesPage.getSelectedInstrument()); };
     addAndMakeVisible (inMeter);
     addAndMakeVisible (outMeter);
     addAndMakeVisible (hitLed);
@@ -35,7 +38,7 @@ ThrumaEditor::ThrumaEditor (ThrumaProcessor& p)
     setResizable (true, true);
     setResizeLimits (940, 620, 2000, 1400);
     setSize (1080, 700);
-    showTab (juce::jlimit (0, 2, proc.getUiTab()));
+    showTab (juce::jlimit (0, kNumTabs - 1, proc.getUiTab()));
     startTimerHz (30);
 }
 
@@ -49,12 +52,13 @@ void ThrumaEditor::showTab (int index)
 {
     currentTab = index;
     proc.setUiTab (index);
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < kNumTabs; ++i)
         tabs[(size_t) i].setToggleState (i == index, juce::dontSendNotification);
     debleedPage.setVisible (index == 0);
     replacePage.setVisible (index == 1);
     samplesPage.setVisible (index == 2);
-    if (index == 2) samplesPage.refreshDetail();
+    playerPage.setVisible (index == 3);
+    if (index == 2) samplesPage.selectSlot (samplesPage.getSelectedInstrument());
 }
 
 void ThrumaEditor::paint (juce::Graphics& g)
@@ -78,8 +82,12 @@ void ThrumaEditor::resized()
     auto r = getLocalBounds();
     auto header = r.removeFromTop (52);
     const int tabW = 120, tabH = 32;
-    auto tabArea = header.withSizeKeepingCentre (tabW * 3 + 12, tabH);
-    for (auto& t : tabs) { t.setBounds (tabArea.removeFromLeft (tabW)); tabArea.removeFromLeft (6); }
+    auto tabArea = header.withSizeKeepingCentre (tabW * kNumTabs + 6 * (kNumTabs - 1), tabH);
+    for (int i : { 3, 0, 1, 2 })   // shown: PLAYER, DEBLEED, REPLACE, SAMPLES
+    {
+        tabs[(size_t) i].setBounds (tabArea.removeFromLeft (tabW));
+        tabArea.removeFromLeft (6);
+    }
 
     auto right = header.reduced (14, 10);
     outMeter.setBounds (right.removeFromRight (8));
@@ -90,7 +98,7 @@ void ThrumaEditor::resized()
     right.removeFromRight (10);
     latencyLabel.setBounds (right.removeFromRight (150));
 
-    for (juce::Component* p : std::initializer_list<juce::Component*> { &debleedPage, &replacePage, &samplesPage })
+    for (juce::Component* p : std::initializer_list<juce::Component*> { &debleedPage, &replacePage, &samplesPage, &playerPage })
         p->setBounds (r);
 }
 

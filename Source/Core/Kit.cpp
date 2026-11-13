@@ -1,4 +1,5 @@
 #include "Kit.h"
+#include <functional>
 
 #include "DspUtils.h"
 #include "Resampler.h"
@@ -49,6 +50,7 @@ std::shared_ptr<SampleData> SampleData::create (std::string path, std::string na
 {
     auto s = std::make_shared<SampleData>();
     s->path = std::move (path);
+    s->pathHash = (uint64_t) std::hash<std::string>{} (s->path);
     s->name = std::move (name);
     s->sourceRate = rate;
     if (channels.size() > 2) channels.resize (2);
@@ -63,6 +65,7 @@ std::shared_ptr<SampleData> SampleData::withPlaybackRate (double rate) const
 {
     auto s = std::make_shared<SampleData>();
     s->path = path;
+    s->pathHash = pathHash;
     s->name = name;
     s->sourceRate = sourceRate;
     s->source = source;
@@ -106,6 +109,8 @@ Kit::Kit()
 {
     for (int i = 0; i < kNumInstruments; ++i)
         slots[(size_t) i].midiNote = getProfile ((Instrument) i).defaultMidiNote;
+    for (int i = kNumInstruments; i < kNumKitSlots; ++i)
+        slots[(size_t) i].midiNote = -1;
 }
 
 std::unique_ptr<Kit> Kit::resampledTo (double rate) const
@@ -133,8 +138,8 @@ std::unique_ptr<Kit> Kit::resampledTo (double rate) const
 
 int Kit::findInstrumentForNote (int note) const noexcept
 {
-    for (int i = 0; i < kNumInstruments; ++i)
-        if (slots[(size_t) i].midiNote == note) return i;
+    for (int i = 0; i < kNumKitSlots; ++i)
+        if (slots[(size_t) i].midiNote == note && ! (isPadSlot (i) && slots[(size_t) i].isEmpty())) return i;
     return -1;
 }
 

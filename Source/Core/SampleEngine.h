@@ -6,6 +6,7 @@
 #include "Kit.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 
 namespace thruma
@@ -19,6 +20,19 @@ struct PlaybackSettings
     bool  invertPolarity   = false;
     bool  autoAlign        = true;  // skip the sample's leading silence so its transient lands on the trigger
     int   startOffset      = 0;     // additional samples skipped at the start (>= 0)
+};
+
+/** Which sample each kit slot played last (written by the audio thread, read by the UI). */
+struct HitMonitor
+{
+    struct Slot
+    {
+        std::atomic<uint32_t> count { 0 };       // changes on every hit
+        std::atomic<float>    velocity { 0.0f };
+        std::atomic<int>      layer { -1 };
+        std::atomic<uint64_t> sampleHash { 0 };  // SampleData::pathHash of the file played
+    };
+    std::array<Slot, kNumKitSlots> slots;
 };
 
 class SampleEngine
@@ -52,6 +66,8 @@ public:
     /** For tests: which sample (and layer index) the last trigger selected. */
     const SampleData* getLastTriggeredSample() const noexcept { return lastSample; }
     int getLastTriggeredLayer() const noexcept { return lastLayer; }
+    /** Optional: report every kit hit here (nullptr = off). */
+    void setHitMonitor (HitMonitor* m) noexcept { monitor = m; }
 
 private:
     struct Voice
@@ -74,8 +90,9 @@ private:
 
     double sr = 48000.0;
     std::array<Voice, kMaxVoices> voices {};
-    std::array<std::array<uint32_t, kMaxLayers>, kNumInstruments> rrCounter {};
-    std::array<std::array<int, kMaxLayers>, kNumInstruments> lastRandom {};
+    std::array<std::array<uint32_t, kMaxLayers>, kNumKitSlots> rrCounter {};
+    std::array<std::array<int, kMaxLayers>, kNumKitSlots> lastRandom {};
+    HitMonitor* monitor = nullptr;
     uint64_t ageCounter = 0;
     uint32_t rng = 0x9E3779B9u;
     int fadeOutSamples = 128, fadeInSamples = 48;

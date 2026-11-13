@@ -114,11 +114,22 @@ The display shows the current reduction per frequency band.
 
 ---
 
+## PLAYER
+
+The kit as a picture, like a drum sampler.
+
+- **Click a drum** to play it: harder towards the middle, softer at the edge (**Shift** = soft).
+- **Right-click a drum** to load samples, add samples, load a whole folder, open its layers on the SAMPLES page, track it on REPLACE, or clear it. The submenu lists its samples; click one to hear it.
+- **Drop audio files** (or a folder) on a drum to load them into it. Drop a folder anywhere else to import it as a whole kit.
+- **Drums light up** when they are played: by tracking, MIDI clips, an imported MIDI file or your clicks.
+- **Pads:** kit sounds that are not one of the drums (cowbell, tambourine, a second crash, FX...) go on the pads under the picture, up to 16. **Import Kit Folder…** puts them there automatically, named after their folder or file, each with its own MIDI note. Click **+ Pad** to load a sound onto a new pad; right-click a pad to rename it.
+
 ## SAMPLES
 
+- **Which sample played:** when the selected drum is hit, the sample file that played lights up (with its velocity), and the drum's row flashes in the kit list.
 - **WAV Browser:** click a file to preview it. Select files and press **Add to instrument** (or double-click) to add them to the selected instrument. Files are sorted into velocity layers by loudness; samples of similar loudness alternate as round-robin.
-- **Import Folder…:** assigns every WAV in a folder to instruments by name (kick, snare, tom/floor, hat, crash, ride, china, splash).
-- **Kit list:** select an instrument to edit it.
+- **Import Folder…:** assigns every WAV in a folder to instruments by name (kick, snare, tom/floor, hat, crash, ride, china, splash); other sounds become pads.
+- **Kit list:** select an instrument or pad to edit it. Double-click a pad's name above its layers to rename it.
 - **Layers:** each row is a velocity layer (velocity range 1–127) with its round-robin samples. Drop files on a row to add them to that layer. Shift-click a sample to remove it. **Round robin / Random** sets how the samples alternate. **MIDI note** is the note used for MIDI.
 - **Load Kit… / Save Kit… / New Kit:** kits are `.thrumakit` files that point to your original WAV files. Samples are never copied or changed.
 

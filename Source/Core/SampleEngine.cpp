@@ -75,7 +75,7 @@ void SampleEngine::trigger (const Kit& kit, uint64_t kitSeq, Instrument inst, fl
                             int startDelay, const PlaybackSettings& ps) noexcept
 {
     const int ii = (int) inst;
-    if (ii < 0 || ii >= kNumInstruments) return;
+    if (ii < 0 || ii >= kNumKitSlots) return;
     const auto& slot = kit.slots[(size_t) ii];
     if (slot.layers.empty()) return;
 
@@ -125,6 +125,14 @@ void SampleEngine::trigger (const Kit& kit, uint64_t kitSeq, Instrument inst, fl
 
     lastSample = s;
     lastLayer = layerIdx;
+    if (monitor != nullptr)
+    {
+        auto& m = monitor->slots[(size_t) ii];
+        m.velocity.store (velocity, std::memory_order_relaxed);
+        m.layer.store (layerIdx, std::memory_order_relaxed);
+        m.sampleHash.store (s->pathHash, std::memory_order_relaxed);
+        m.count.fetch_add (1, std::memory_order_release);
+    }
 
     // --- level ---
     const float targetDb = slot.maxPeakDb + (velocity - 1.0f) * ps.dynamicRangeDb * std::clamp (ps.velocityResponse, 0.0f, 1.0f);

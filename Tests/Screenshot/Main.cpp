@@ -25,8 +25,48 @@ int main (int argc, char** argv)
 
     sig::SessionOptions o; o.seconds = 14.0; o.bleedScaleDb = 6.0f;
     const auto s = sig::makeMetalSession (o);
+
+    // a small kit: snare (2 round-robin files), kick, and a pad
+    auto* tp = dynamic_cast<thruma::ThrumaProcessor*> (proc.get());
+    auto wav = [] (const juce::String& name, float freq)
+    {
+        juce::File f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("thruma_shot").getChildFile (name + ".wav");
+        f.getParentDirectory().createDirectory();
+        juce::AudioBuffer<float> b (1, 12000);
+        for (int i = 0; i < 12000; ++i) b.setSample (0, i, 0.8f * std::sin ((float) i * freq) * std::exp (-(float) i / 2500.0f));
+        f.deleteFile();
+        juce::WavAudioFormat fmt;
+        std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (f), 48000.0, 1, 24, {}, 0));
+        w->writeFromAudioSampleBuffer (b, 0, 12000);
+        return f;
+    };
+    tp->getKitManager().assignFiles ((int) thruma::Instrument::Snare, { wav ("Snare_Top_rr1", 0.05f), wav ("Snare_Top_rr2", 0.051f) });
+    tp->getKitManager().assignFiles ((int) thruma::Instrument::Kick, { wav ("Kick_In", 0.01f) });
+    tp->getKitManager().setSlotName (thruma::kNumInstruments, "Cowbell");
+    tp->getKitManager().assignFiles (thruma::kNumInstruments, { wav ("Cowbell", 0.12f) });
+    tp->rebuildKit();
+
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditorAndMakeActive());
     ed->setSize (1080, 760);
+    auto snap = [&] (const juce::String& tab, const juce::String& file)
+    {
+        juce::MessageManager::callAsync ([&, tab, file]
+        {
+            if (tab.isNotEmpty())
+                for (auto* c : ed->getChildren())
+                    if (auto* b = dynamic_cast<juce::TextButton*> (c); b != nullptr && b->getButtonText() == tab) b->onClick();
+        });
+        juce::Thread::sleep (250);
+        juce::MessageManager::callAsync ([&, file]
+        {
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds());
+            juce::File f = out.getChildFile (file);
+            f.deleteFile();
+            juce::FileOutputStream os (f);
+            juce::PNGImageFormat().writeImageToStream (img, os);
+        });
+        juce::Thread::sleep (200);
+    };
     // audio on its own thread (like a host), message loop on the main thread
     std::thread audio ([&]
     {
@@ -39,19 +79,9 @@ int main (int argc, char** argv)
             midi.clear();
             proc->processBlock (buf, midi);
             std::this_thread::sleep_for (std::chrono::microseconds (900));
-            if (p == (s.length * 7 / 10) / 256 * 256)
-            {
-                juce::Thread::sleep (300);
-                juce::MessageManager::callAsync ([&]
-                {
-                    auto img = ed->createComponentSnapshot (ed->getLocalBounds());
-                    juce::File f = out.getChildFile ("replace_live.png");
-                    f.deleteFile();
-                    juce::FileOutputStream os (f);
-                    juce::PNGImageFormat().writeImageToStream (img, os);
-                });
-                juce::Thread::sleep (300);
-            }
+            if (p == (s.length * 6 / 10) / 256 * 256) { juce::Thread::sleep (300); snap ("REPLACE", "replace_live.png"); }
+            if (p == (s.length * 7 / 10) / 256 * 256) { tp->auditionSlot (thruma::kNumInstruments, 0.9f); tp->auditionSlot ((int) thruma::Instrument::Kick, 0.9f); snap ("PLAYER", "player.png"); }
+            if (p == (s.length * 8 / 10) / 256 * 256) { snap ("SAMPLES", "samples.png"); }
         }
         juce::Thread::sleep (300);
         juce::MessageManager::callAsync ([&] { juce::MessageManager::getInstance()->stopDispatchLoop(); });

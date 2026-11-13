@@ -19,8 +19,15 @@ public:
     void filesDropped (const juce::StringArray& files, int, int) override;
     void fileDragEnter (const juce::StringArray&, int, int) override { dragOver = true; repaint(); }
     void fileDragExit (const juce::StringArray&) override { dragOver = false; repaint(); }
+    void paintOverChildren (juce::Graphics&) override;
+    /** Light up the chip of the sample that just played (by SampleData::pathHash). */
+    void flash (uint64_t sampleHash, float velocity);
+    bool decay();   // true while still lit
 
 private:
+    std::vector<uint64_t> hashes;   // per chip
+    int flashIdx = -1;
+    float flashLevel = 0.0f, flashVel = 0.0f;
     SamplesPage& page;
     int layer;
     juce::Label title;
@@ -32,6 +39,7 @@ private:
 
 class SamplesPage : public juce::Component,
                     public juce::FileDragAndDropTarget,
+                    private juce::Timer,
                     private juce::ListBoxModel,
                     private juce::FileBrowserListener
 {
@@ -49,10 +57,13 @@ public:
     int getSelectedInstrument() const { return selectedInstrument; }
     void kitChanged();          // rebuild audio kit + refresh UI
     void refreshDetail();
+    /** Show a drum or pad (kit slot). */
+    void selectSlot (int slot);
 
 private:
+    void timerCallback() override;
     // ListBoxModel
-    int getNumRows() override { return kNumInstruments; }
+    int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics&, int w, int h, bool selected) override;
     void selectedRowsChanged (int lastRowSelected) override;
     // FileBrowserListener
@@ -81,6 +92,8 @@ private:
     juce::Viewport layerViewport;
     juce::Component layerHolder;
     juce::OwnedArray<LayerRow> rows;
+    std::array<uint32_t, kNumKitSlots> seenHits {};
+    std::array<float, kNumKitSlots> rowFlash {};
     std::unique_ptr<juce::FileChooser> chooser;
 };
 

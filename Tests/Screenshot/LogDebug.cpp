@@ -3,6 +3,7 @@
 #include "../../Source/Plugin/PluginProcessor.h"
 #include "../../Source/Plugin/UI/TrackerLane.h"
 #include <random>
+#include <set>
 using namespace thruma;
 
 // ---- a fake RAVENYR host API (the real one is exported by the RAVENYR executable) ----
@@ -389,6 +390,77 @@ int main()
         check (c0 > 0.98, "imported audio, Blend 0 %: the original (correlation " + juce::String (c0, 3) + ")");
         check (c1 < 0.3, "imported audio, Blend 100 %: samples only (correlation " + juce::String (c1, 3) + ")");
         ed.reset();
+    }
+
+    // ---- 5d) kit pads, hit monitor, auditions ----
+    {
+        juce::File dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("thruma_kit_import");
+        dir.deleteRecursively();
+        dir.getChildFile ("Cowbell").createDirectory();
+        auto mk = [] (const juce::File& f, float freq)
+        {
+            juce::AudioBuffer<float> b (1, 6000);
+            for (int i = 0; i < 6000; ++i) b.setSample (0, i, 0.7f * std::sin ((float) i * freq) * std::exp (-(float) i / 1500.0f));
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (f), 48000.0, 1, 24, {}, 0));
+            w->writeFromAudioSampleBuffer (b, 0, 6000);
+        };
+        mk (dir.getChildFile ("Snare_rr1.wav"), 0.05f);
+        mk (dir.getChildFile ("Snare_rr2.wav"), 0.06f);
+        mk (dir.getChildFile ("Cowbell").getChildFile ("01.wav"), 0.2f);
+        mk (dir.getChildFile ("Cowbell").getChildFile ("02.wav"), 0.21f);
+        mk (dir.getChildFile ("Tambourine_v1.wav"), 0.3f);
+        mk (dir.getChildFile ("Tambourine_v2.wav"), 0.31f);
+
+        std::unique_ptr<ThrumaProcessor> p9 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH ph9; ph9.playing = false; p9->setPlayHead (&ph9); p9->prepareToPlay (48000.0, 512);
+        auto& km = p9->getKitManager();
+        const int n = km.importFolder (dir);
+        p9->rebuildKit();
+        const int pad0 = kNumInstruments, pad1 = kNumInstruments + 1;
+        check (n == 6 && km.getNumUsedPads() == 2, "kit folder import: drums by name, other sounds onto pads (" + juce::String (km.getNumUsedPads()) + " pads)");
+        check (km.getSlotName (pad0) == "Cowbell" && km.getSlotName (pad1) == "Tambourine", "pads named after folder / file: "
+               + km.getSlotName (pad0) + ", " + km.getSlotName (pad1));
+        const int note0 = km.getSlot (pad0).midiNote, note1 = km.getSlot (pad1).midiNote;
+        check (note0 >= 0 && note1 >= 0 && note0 != note1 && note0 != 38 && note1 != 36, "pads get their own free MIDI notes: " + juce::String (note0) + ", " + juce::String (note1));
+
+        // save / load keeps the pads
+        juce::File kf = dir.getChildFile ("kit.thrumakit");
+        km.saveKitFile (kf);
+        km.clearAll();
+        check (km.getNumUsedPads() == 0, "new kit has no pads");
+        km.loadKitFile (kf);
+        check (km.getSlotName (pad1) == "Tambourine" && km.getSlot (pad1).midiNote == note1 && ! km.getSlot (pad1).isEmpty(), "pads survive saving and loading the kit");
+        p9->rebuildKit();
+        pump (100);
+
+        // blend 0 must not silence auditions; the monitor reports the slot and the exact file
+        p9->apvts.getParameter (ids::repBlend)->setValueNotifyingHost (0.0f);
+        pump (50);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        const auto& hm = p9->getHitMonitor();
+        std::set<uint64_t> snareFiles;
+        float pk = 0;
+        for (int k = 0; k < 4; ++k)
+        {
+            p9->auditionSlot ((int) Instrument::Snare, 0.9f);
+            for (int blk = 0; blk < 3; ++blk) { buf.clear(); midi.clear(); p9->processBlock (buf, midi); pk = std::max (pk, buf.getMagnitude (0, 0, 512)); }
+            snareFiles.insert (hm.slots[(size_t) Instrument::Snare].sampleHash.load());
+        }
+        const auto h1 = (uint64_t) std::hash<std::string>{} (dir.getChildFile ("Snare_rr1.wav").getFullPathName().toStdString());
+        const auto h2 = (uint64_t) std::hash<std::string>{} (dir.getChildFile ("Snare_rr2.wav").getFullPathName().toStdString());
+        check (pk > 0.3f, "Player click plays at Blend 0 % (peak " + juce::String (pk, 2) + ")");
+        check (hm.slots[(size_t) Instrument::Snare].count.load() == 4 && snareFiles == std::set<uint64_t> { h1, h2 },
+               "hit monitor names the exact file each hit played (round robin alternates both)");
+
+        // a pad from a MIDI note (instrument track / MIDI file)
+        const auto before = hm.slots[(size_t) pad1].count.load();
+        buf.clear(); midi.clear(); midi.addEvent (juce::MidiMessage::noteOn (10, note1, (juce::uint8) 100), 10);
+        p9->apvts.getParameter (ids::repBlend)->setValueNotifyingHost (1.0f);
+        pump (50);
+        float padPk = 0;
+        for (int blk = 0; blk < 6; ++blk) { p9->processBlock (buf, midi); padPk = std::max (padPk, buf.getMagnitude (0, 0, 512)); buf.clear(); midi.clear(); }
+        check (hm.slots[(size_t) pad1].count.load() == before + 1 && padPk > 0.2f, "MIDI note " + juce::String (note1) + " plays the Tambourine pad");
     }
 
     // ---- 6) stopped host: the playhead stays put ----

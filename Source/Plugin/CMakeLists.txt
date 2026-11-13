@@ -33,7 +33,8 @@ target_sources(Thruma PRIVATE
     UI/TrackerLane.cpp
     UI/ReplacePage.cpp
     UI/DebleedPage.cpp
-    UI/SamplesPage.cpp)
+    UI/SamplesPage.cpp
+    UI/PlayerPage.cpp)
 
 target_include_directories(Thruma PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -49,8 +50,12 @@ target_compile_definitions(Thruma PUBLIC
     JUCE_USE_OGGVORBIS=0
     JUCE_USE_MP3AUDIOFORMAT=0)
 
+juce_add_binary_data(ThrumaAssets SOURCES "${PROJECT_SOURCE_DIR}/Assets/kit.jpg")
+set_target_properties(ThrumaAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 target_link_libraries(Thruma
     PRIVATE
+        ThrumaAssets
         thruma_core
         juce::juce_audio_utils
         juce::juce_audio_formats

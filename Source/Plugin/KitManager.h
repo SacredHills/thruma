@@ -25,7 +25,9 @@ public:
     {
         std::vector<LayerModel> layers;
         RoundRobinMode rrMode = RoundRobinMode::Cycle;
-        int midiNote = 36;
+        int midiNote = 36;          // pads: -1 = none yet
+        juce::String name;          // pads only (empty = "Pad N")
+        bool isEmpty() const { for (auto& l : layers) if (! l.files.isEmpty()) return false; return true; }
     };
 
     KitManager();
@@ -33,6 +35,13 @@ public:
     // --- model access (guarded; copy out for UI display) ---
     SlotModel getSlot (int instrument) const;
     void setSlot (int instrument, const SlotModel& s);
+    /** "Snare", or a pad's name ("Cowbell", "Pad 3"). */
+    juce::String getSlotName (int slot) const;
+    void setSlotName (int slot, const juce::String& name);
+    /** Pads in use (highest used pad + 1, counted from 0). */
+    int getNumUsedPads() const;
+    /** A MIDI note no other slot uses (prefers General MIDI percussion notes). */
+    int findFreeMidiNote() const;
     juce::String getKitName() const;
     void setKitName (const juce::String& n);
 
@@ -70,7 +79,8 @@ public:
 private:
     mutable std::recursive_mutex mutex;
     juce::AudioFormatManager formats;
-    std::array<SlotModel, kNumInstruments> slots;
+    std::array<SlotModel, kNumKitSlots> slots;   // drums, then pads
+    void givePadANote (int slot);
     juce::String kitName { "Untitled Kit" };
     std::map<juce::String, std::pair<juce::Time, SamplePtr>> cache;   // path -> (mtime, sample)
     std::map<juce::String, SamplePtr> playCache;                       // path|rate -> resampled sample

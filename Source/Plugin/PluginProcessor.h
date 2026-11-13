@@ -114,6 +114,10 @@ public:
     int getTransportMode() const { return transportMode.load(); }
 
     void previewSample (const juce::File& file);
+    /** Player / pads: play a kit slot now, at full level whatever the Blend (message thread). */
+    void auditionSlot (int slot, float velocity);
+    /** Which sample each kit slot played last (Player highlights, Samples page). */
+    const HitMonitor& getHitMonitor() const { return hitMonitor; }
 
     // --- offline analysis: the whole track (from the host) or an imported file ---
     enum class OfflineSource { None, HostTrack, Heard, File };
@@ -199,6 +203,10 @@ private:
     ReplaceEngine replace;
     DebleedProcessor debleed;
     SampleEngine previewEngine;
+    HitMonitor hitMonitor;
+    struct Audition { int slot; float velocity; };
+    std::array<Audition, 32> auditionQueue {};
+    juce::AbstractFifo auditionFifo { 32 };
     std::array<DelayLine, 2> linkDelayLines;
 
     // --- published immutable data ---

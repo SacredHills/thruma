@@ -18,6 +18,7 @@ namespace thruma
 struct SampleData
 {
     std::string path;           // original file (never modified)
+    uint64_t pathHash = 0;      // std::hash of path (lets the UI tell which file just played)
     std::string name;
     double sourceRate = 48000.0;
     std::vector<std::vector<float>> source;   // native-rate channels (1 or 2)
@@ -66,12 +67,12 @@ struct Kit
 {
     std::string name = "Default";
     double playRate = 48000.0;
-    std::array<InstrumentSlot, kNumInstruments> slots;
+    std::array<InstrumentSlot, kNumKitSlots> slots;   // drums, then pads (pads: midiNote -1 = none)
 
     Kit();
     /** Copy with every sample converted to 'rate' (reuses samples already at that rate). */
     std::unique_ptr<Kit> resampledTo (double rate) const;
-    int findInstrumentForNote (int note) const noexcept;  // -1 if none
+    int findInstrumentForNote (int note) const noexcept;  // kit slot (drum or pad), -1 if none
 };
 
 /** Group samples of one instrument into velocity layers by attack loudness:

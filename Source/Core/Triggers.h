@@ -19,7 +19,7 @@ struct Trigger
 
     bool operator== (const Trigger& o) const noexcept
     {
-        return position == o.position && velocity == o.velocity && ghost == o.ghost && id == o.id;
+        return position == o.position && ! (velocity < o.velocity) && ! (o.velocity < velocity) && ghost == o.ghost && id == o.id;
     }
 };
 

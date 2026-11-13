@@ -82,6 +82,7 @@ private:
     std::vector<float> mono;
     float dryGainCur = 0.0f, wetGainCur = 1.0f, outGainCur = 1.0f;
     int64_t inPos = 0;
+    bool prepared = false;
 };
 
 //==============================================================================
@@ -90,6 +91,7 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
                              const Kit* kit, uint64_t kitSeq, const TriggerSnapshot* triggers,
                              const MidiTrigger* midi, int numMidi, OnHit&& onHit) noexcept
 {
+    if (! prepared) return;
     numCh = std::clamp (numCh, 1, channels);
     n = std::min (n, maxBlock);
     const int detectedSlot = settings.sampleSlot >= 0 ? settings.sampleSlot : (int) settings.detector.instrument;
@@ -144,7 +146,9 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
     const float blend = std::clamp (settings.blend, 0.0f, 1.0f);
     float dryT, wetT;
     // When replacement is off only MIDI-triggered voices can sound, at unity, on top of the untouched dry signal.
-    if (! settings.enabled)                        { dryT = 1.0f; wetT = 1.0f; }
+    // An empty kit slot never mutes the original: replacing with nothing would silence the track.
+    const bool slotEmpty = kit == nullptr || kit->slots[(size_t) std::clamp (detectedSlot, 0, kNumInstruments - 1)].isEmpty();
+    if (! settings.enabled || (slotEmpty && settings.source != TriggerSource::MidiOnly)) { dryT = 1.0f; wetT = 1.0f; }
     else if (settings.mode == ReplaceMode::Layer)  { dryT = 1.0f; wetT = blend; }
     else                                           { dryT = 1.0f - blend; wetT = blend; }
     const float outT = dbToGain (settings.outputDb);

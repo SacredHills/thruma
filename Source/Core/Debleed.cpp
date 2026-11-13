@@ -98,6 +98,7 @@ void DebleedProcessor::prepare (double sampleRate, int numChannels)
     prefix.assign ((size_t) numBins + 1, 0.0f);
 
     detector.prepare (sr);
+    prepared = true;
 
     // meter bands: log spaced 30 Hz .. min(20 kHz, Nyquist)
     const double lo = 30.0, hi = std::min (20000.0, sr * 0.5);
@@ -173,6 +174,7 @@ void DebleedProcessor::adoptModel (const DebleedModel& m) noexcept
 
 void DebleedProcessor::reset() noexcept
 {
+    if (! prepared) return;
     for (int c = 0; c < kMaxChannels; ++c)
     {
         std::fill (inFifo[(size_t) c].begin(), inFifo[(size_t) c].end(), 0.0f);
@@ -196,6 +198,7 @@ void DebleedProcessor::reset() noexcept
 
 void DebleedProcessor::process (float* const* io, int numCh, const float* ref, int n) noexcept
 {
+    if (! prepared) return;
     numCh = std::clamp (numCh, 1, channels);
     const float monoScale = 1.0f / (float) numCh;
 

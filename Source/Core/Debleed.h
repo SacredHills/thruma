@@ -116,6 +116,7 @@ private:
     std::vector<float> gainRaw, gainTmp, prefix, confidence, modelTransfer;
     bool modelHasTransfer = false, modelHasTau = false;
     int activeChannels = 1;
+    bool prepared = false;
 
     // detection (runs ahead of the STFT output by fftSize samples -> lookahead)
     TransientDetector detector;

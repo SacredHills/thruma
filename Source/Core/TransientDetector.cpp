@@ -139,6 +139,7 @@ void TransientDetector::updateDerived() noexcept
 
 void TransientDetector::reset (int64_t startPosition) noexcept
 {
+    if (! prepared) return;
     bodyHp1.reset(); bodyHp2.reset(); bodyLp.reset();
     atkHp1.reset(); atkHp2.reset(); atkLp.reset();
     posHp.reset(); fullHp.reset();

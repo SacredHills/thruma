@@ -18,12 +18,14 @@ void ReplaceEngine::prepare (double sampleRate, int maxBlockSize, int numChannel
         wet[(size_t) c].assign ((size_t) maxBlock, 0.0f);
     }
     mono.assign ((size_t) maxBlock, 0.0f);
+    prepared = true;
     setSettings (settings);
     reset();
 }
 
 void ReplaceEngine::reset() noexcept
 {
+    if (! prepared) return;
     for (auto& d : dryDelay) d.reset();
     samples.reset();
     inPos = 0;

@@ -28,6 +28,7 @@ private:
     ui::ThrumaLookAndFeel lnf;
     juce::TooltipWindow tooltips { this, 700 };
 
+    static constexpr int kHeaderH = 64;
     static constexpr int kNumTabs = 5;     // index: 0 DEBLEED, 1 REPLACE, 2 SAMPLES, 3 PLAYER, 4 MIXER (saved in projects)
     std::array<juce::TextButton, kNumTabs> tabs;
     ui::PlayerPage playerPage;
@@ -38,6 +39,7 @@ private:
     ui::LevelMeter inMeter, outMeter;
     ui::HitLed hitLed;
     juce::Label latencyLabel;
+    juce::Image logo;
     int lastHits = 0;
     int currentTab = 0;
 };

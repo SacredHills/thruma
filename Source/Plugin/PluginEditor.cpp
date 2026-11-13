@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "BinaryData.h"
 
 namespace thruma
 {
@@ -7,6 +8,7 @@ ThrumaEditor::ThrumaEditor (ThrumaProcessor& p)
     : AudioProcessorEditor (p), proc (p), playerPage (p), mixerPage (p), replacePage (p), debleedPage (p), samplesPage (p)
 {
     setLookAndFeel (&lnf);
+    logo = juce::ImageCache::getFromMemory (BinaryData::logo_png, BinaryData::logo_pngSize);
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
 
     const char* names[] = { "DEBLEED", "REPLACE", "SAMPLES", "PLAYER", "MIXER" };
@@ -67,23 +69,31 @@ void ThrumaEditor::showTab (int index)
 void ThrumaEditor::paint (juce::Graphics& g)
 {
     g.fillAll (ui::colours::background);
-    auto header = getLocalBounds().removeFromTop (52);
-    g.setColour (ui::colours::panel);
+    auto header = getLocalBounds().removeFromTop (kHeaderH);
+    g.setColour (juce::Colours::black);
     g.fillRect (header);
     g.setColour (ui::colours::outline);
     g.drawHorizontalLine (header.getBottom() - 1, 0.0f, (float) getWidth());
 
-    g.setColour (ui::colours::text);
-    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-    g.drawText ("THRUMA", 18, 0, 140, header.getHeight(), juce::Justification::centredLeft);
-    g.setColour (ui::colours::accent);
-    g.fillRect (18, header.getHeight() - 14, 26, 3);
+    if (logo.isValid())
+    {
+        // keep it clear of the tabs
+        const int maxW = juce::jmax (80, tabs[3].getX() - 30);
+        auto area = juce::Rectangle<int> (14, 5, maxW, header.getHeight() - 10);
+        g.drawImage (logo, area.toFloat(), juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid | juce::RectanglePlacement::onlyReduceInSize);
+    }
+    else
+    {
+        g.setColour (ui::colours::text);
+        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+        g.drawText ("THRUMA", 18, 0, 140, header.getHeight(), juce::Justification::centredLeft);
+    }
 }
 
 void ThrumaEditor::resized()
 {
     auto r = getLocalBounds();
-    auto header = r.removeFromTop (52);
+    auto header = r.removeFromTop (kHeaderH);
     const int tabW = 108, tabH = 32;
     auto tabArea = header.withSizeKeepingCentre (tabW * kNumTabs + 6 * (kNumTabs - 1), tabH);
     for (int i : { 3, 0, 1, 2, 4 })   // shown: PLAYER, DEBLEED, REPLACE, SAMPLES, MIXER

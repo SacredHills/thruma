@@ -7,17 +7,18 @@ namespace thruma::ui
 
 namespace colours
 {
-    const juce::Colour background  { 0xff111317 };
-    const juce::Colour panel       { 0xff181b20 };
-    const juce::Colour panelRaised { 0xff1f2329 };
-    const juce::Colour outline     { 0xff2b3037 };
-    const juce::Colour text        { 0xffe4e7eb };
-    const juce::Colour textDim     { 0xff8a929c };
-    const juce::Colour accent      { 0xff45c7b8 };   // teal: controls, waveform
-    const juce::Colour trigger     { 0xfff2a545 };   // amber: hits
+    // black & white theme
+    const juce::Colour background  { 0xff080808 };
+    const juce::Colour panel       { 0xff121212 };
+    const juce::Colour panelRaised { 0xff1c1c1c };
+    const juce::Colour outline     { 0xff343434 };
+    const juce::Colour text        { 0xfff0f0f0 };
+    const juce::Colour textDim     { 0xff8a8a8a };
+    const juce::Colour accent      { 0xffffffff };   // white: controls, waveform, hits lighting up
+    const juce::Colour trigger     { 0xffb8b8b8 };   // light grey: hits, solo
     const juce::Colour selection   { 0xffffffff };
-    const juce::Colour danger      { 0xffef6f6c };
-    const juce::Colour record      { 0xffe5534b };
+    const juce::Colour danger      { 0xffd8d8d8 };   // missing files, clipping, mute
+    const juce::Colour record      { 0xffffffff };   // playhead
 }
 
 class ThrumaLookAndFeel : public juce::LookAndFeel_V4

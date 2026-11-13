@@ -28,7 +28,7 @@ jobs:
             os: windows-2022
             generator: Visual Studio 17 2022
           - name: macOS Universal
-            os: macos-14
+            os: macos-latest
             generator: Ninja
 
     steps:

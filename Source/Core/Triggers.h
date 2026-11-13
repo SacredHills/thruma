@@ -16,10 +16,11 @@ struct Trigger
     float    velocity = 1.0f; // 0..1
     bool     ghost = false;
     uint32_t id = 0;
+    bool     locked = false;   // added/changed by the user: live re-detection never removes it
 
     bool operator== (const Trigger& o) const noexcept
     {
-        return position == o.position && ! (velocity < o.velocity) && ! (o.velocity < velocity) && ghost == o.ghost && id == o.id;
+        return position == o.position && ! (velocity < o.velocity) && ! (o.velocity < velocity) && ghost == o.ghost && id == o.id && locked == o.locked;
     }
 };
 
@@ -40,6 +41,8 @@ public:
     /** Nearest trigger within +-tolerance samples, or nullptr. */
     const Trigger* findNearest (int64_t position, int64_t tolerance) const noexcept;
     void clear() { triggers.clear(); }
+    /** Remove triggers in [from, to) that the user has not edited. Returns the number removed. */
+    size_t removeUnlockedInRange (int64_t from, int64_t to);
     void setAll (std::vector<Trigger> t);
 
     /** Index of the first trigger with position >= p. */

@@ -70,6 +70,7 @@ private:
     float dragStartY = 0.0f;
     juce::Rectangle<float> rubber;
     int hoverIndex = -1;
+    juce::uint32 lastInteractionMs = 0;
     size_t lastTriggerCount = (size_t) -1;
 };
 

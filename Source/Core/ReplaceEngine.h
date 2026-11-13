@@ -38,6 +38,8 @@ struct ReplaceHitInfo
     float velocity;
     int outputOffset;    // samples from the start of the current output block (may be >= block size)
     bool fromMidi;
+    int onsetOffset = 0; // live hits: onset relative to the start of this input block (usually negative)
+    bool ghost = false;
 };
 
 struct MidiTrigger
@@ -111,7 +113,7 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
         {
             const int off = (int) (h.position - blockStart) + lookahead + alignShift;
             scheduleHit (kit, kitSeq, detectedSlot, h.velocity, std::max (0, off));
-            onHit (ReplaceHitInfo { detectedSlot, h.velocity, std::max (0, off), false });
+            onHit (ReplaceHitInfo { detectedSlot, h.velocity, std::max (0, off), false, (int) (h.position - blockStart), h.ghost });
         }
     }
     inPos += n;

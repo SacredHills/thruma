@@ -5,6 +5,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <random>
 
@@ -71,6 +72,85 @@ RunResult run (juce::AudioPluginInstance& p, double sr, int block, double second
             }
     }
     return r;
+}
+
+/** A host transport that plays from 'pos'. */
+struct TestPlayHead : juce::AudioPlayHead
+{
+    int64_t pos = 0;
+    bool playing = true;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo p;
+        p.setIsPlaying (playing);
+        p.setTimeInSamples (pos);
+        p.setTimeInSeconds ((double) pos / 48000.0);
+        p.setBpm (120.0);
+        return p;
+    }
+};
+
+/** Number of triggers and whether a learned detection model is stored in the plugin state. */
+struct StateInfo { int triggers = -1; bool learned = false; bool overview = false; };
+
+StateInfo inspectState (juce::AudioPluginInstance& p)
+{
+    StateInfo info;
+    juce::MemoryBlock mb;
+    p.getStateInformation (mb);
+    // The VST3 host wraps the plugin's own state; unwrap the component state and find JUCE's binary-XML block.
+    if (auto outer = juce::AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
+        outer != nullptr && outer->getChildByName ("IComponent") != nullptr)
+    {
+        juce::MemoryBlock inner;
+        inner.fromBase64Encoding (outer->getChildByName ("IComponent")->getAllSubText().trim());
+        mb = inner;
+    }
+    std::unique_ptr<juce::XmlElement> xml;
+    for (size_t off = 0; off + 8 < mb.getSize() && xml == nullptr; ++off)
+        if (std::memcmp (static_cast<const char*> (mb.getData()) + off, "VC2!", 4) == 0)
+            xml = juce::AudioProcessor::getXmlFromBinary (static_cast<const char*> (mb.getData()) + off, (int) (mb.getSize() - off));
+    if (xml == nullptr)
+    {
+        std::cout << "    (could not decode state, " << mb.getSize() << " bytes: " << juce::String::toHexString (mb.getData(), juce::jmin (48, (int) mb.getSize())) << ")" << std::endl;
+        return info;
+    }
+    if (std::getenv ("THRUMA_DEBUG_STATE") != nullptr) std::cout << xml->toString().substring (0, 600) << std::endl;
+    if (auto* t = xml->getChildByName ("TRIGGERS"))
+    {
+        juce::MemoryOutputStream mo;
+        if (juce::Base64::convertFromBase64 (mo, t->getStringAttribute ("data")) && mo.getDataSize() >= 8)
+        {
+            uint32_t n;
+            std::memcpy (&n, static_cast<const char*> (mo.getData()) + 4, 4);
+            info.triggers = (int) n;
+        }
+        info.learned = t->hasAttribute ("refDb");
+    }
+    info.overview = xml->getChildByName ("OVERVIEW") != nullptr;
+    return info;
+}
+
+/** Play [from, from + seconds) with a running transport, pumping the message thread like a DAW does. */
+void playTransport (juce::AudioPluginInstance& p, TestPlayHead& ph, int64_t from, double seconds, int block)
+{
+    std::mt19937 rng (1);
+    const int chans = juce::jmax (p.getTotalNumInputChannels(), p.getTotalNumOutputChannels());
+    juce::AudioBuffer<float> buf (chans, block);
+    juce::MidiBuffer midi;
+    for (int64_t pos = from; pos < from + (int64_t) (seconds * 48000.0); pos += block)
+    {
+        ph.pos = pos;
+        buf.clear();
+        for (int i = 0; i < block; ++i)
+        {
+            const float v = testSignal (pos + i, 48000.0, rng);
+            for (int c = 0; c < p.getTotalNumInputChannels(); ++c) buf.setSample (c, i, v);
+        }
+        midi.clear();
+        p.processBlock (buf, midi);
+        if ((pos / block) % 8 == 0) juce::MessageManager::getInstance()->runDispatchLoopUntil (1);
+    }
 }
 
 /** Impulse in -> measure where it comes out; must equal the reported latency (layer mode, empty kit). */
@@ -215,6 +295,27 @@ int main (int argc, char** argv)
             if (a != b) { same = false; std::cout << "    differs: " << plugin->getParameters()[i]->getName (64) << " '" << a << "' vs '" << b << "'" << std::endl; }
         }
         check (same, "all parameter values restored in a new instance");
+    }
+
+    // --- real-time workflow: just press play - hits appear in the editor, no capture/analyze needed ---
+    {
+        auto fresh = vst3.createInstanceFromDescription (desc, 48000.0, 512, err);
+        TestPlayHead ph;
+        fresh->setPlayHead (&ph);
+        fresh->prepareToPlay (48000.0, 512);
+        playTransport (*fresh, ph, 480000, 12.0, 512);   // 12 s starting at 0:10, a hit every 250 ms
+        for (int i = 0; i < 40 && ! inspectState (*fresh).learned; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        auto st = inspectState (*fresh);
+        check (st.triggers >= 46 && st.triggers <= 50, "hits logged live into the editor while playing: " + juce::String (st.triggers) + " (expected 48)");
+        check (st.overview, "track audio recorded for the waveform without pressing anything");
+        check (st.learned, "detection auto-learned from the track while playing");
+
+        playTransport (*fresh, ph, 480000, 12.0, 512);   // loop the same section
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+        st = inspectState (*fresh);
+        check (st.triggers >= 46 && st.triggers <= 50, "replaying a section re-detects without duplicates: " + juce::String (st.triggers));
+        fresh->releaseResources();
+        fresh->setPlayHead (nullptr);
     }
 
     // --- editor ---

@@ -84,6 +84,16 @@ void TriggerList::setAll (std::vector<Trigger> t)
     sort();
 }
 
+size_t TriggerList::removeUnlockedInRange (int64_t from, int64_t to)
+{
+    const auto a = triggers.begin() + (long) lowerBound (from);
+    const auto b = triggers.begin() + (long) lowerBound (to);
+    const auto newEnd = std::remove_if (a, b, [] (const Trigger& t) { return ! t.locked; });
+    const auto n = (size_t) (b - newEnd);
+    triggers.erase (newEnd, b);
+    return n;
+}
+
 size_t TriggerList::lowerBound (int64_t p) const noexcept
 {
     return (size_t) (std::lower_bound (triggers.begin(), triggers.end(), p,
@@ -96,7 +106,7 @@ size_t TriggerSnapshot::lowerBound (int64_t p) const noexcept
                                        [] (const Trigger& t, int64_t v) { return t.position < v; }) - triggers.begin());
 }
 
-// Binary format: "THT1" u32 count, then per trigger: i64 pos, f32 vel, u8 ghost, u32 id (little endian).
+// Binary format: "THT1" u32 count, then per trigger: i64 pos, f32 vel, u8 flags (1 = ghost, 2 = locked), u32 id.
 std::vector<uint8_t> TriggerList::serialise() const
 {
     std::vector<uint8_t> out;
@@ -113,7 +123,7 @@ std::vector<uint8_t> TriggerList::serialise() const
     {
         put (&t.position, 8);
         put (&t.velocity, 4);
-        const uint8_t g = t.ghost ? 1 : 0;
+        const uint8_t g = (uint8_t) ((t.ghost ? 1 : 0) | (t.locked ? 2 : 0));
         put (&g, 1);
         put (&t.id, 4);
     }
@@ -134,7 +144,9 @@ bool TriggerList::deserialise (const uint8_t* data, size_t size)
         Trigger t;
         std::memcpy (&t.position, p, 8); p += 8;
         std::memcpy (&t.velocity, p, 4); p += 4;
-        t.ghost = *p++ != 0;
+        t.ghost = (*p & 1) != 0;
+        t.locked = (*p & 2) != 0;
+        ++p;
         std::memcpy (&t.id, p, 4); p += 4;
         v.push_back (t);
     }

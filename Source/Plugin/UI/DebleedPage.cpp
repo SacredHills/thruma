@@ -77,8 +77,8 @@ DebleedPage::DebleedPage (ThrumaProcessor& p)
     addAndMakeVisible (dbOn);
     addAndMakeVisible (analyzeBtn);
     addAndMakeVisible (advancedBtn);
-    analyzeBtn.setTooltip ("Learn the drum's decay, its fingerprint and the bleed from the audio captured on the Replace page; "
-                           "picks the best reference and a suitable Amount.");
+    analyzeBtn.setTooltip ("Debleed learns automatically while the track plays. 'Learn now' also picks the best reference "
+                           "input and suggests an Amount from everything heard so far.");
     advancedBtn.setClickingTogglesState (true);
     advancedBtn.onClick = [this] { showAdvanced = advancedBtn.getToggleState(); resized(); };
     analyzeBtn.onClick = [this]
@@ -90,7 +90,7 @@ DebleedPage::DebleedPage (ThrumaProcessor& p)
 
     report.setColour (juce::Label::textColourId, colours::textDim);
     report.setText (proc.getDebleedReport().isNotEmpty() ? proc.getDebleedReport()
-                                                         : "Tip: capture a section on the Replace page, then press ANALYZE for automatic settings.",
+                                                         : "Debleed adapts automatically while the track plays.",
                     juce::dontSendNotification);
     addAndMakeVisible (report);
     addAndMakeVisible (display);
@@ -161,6 +161,8 @@ void DebleedPage::timerCallback()
     else s = proc.isSidechainConnected() ? "Sidechain reference connected." : "Route a reference mic to the sidechain input.";
     linkStatus.setText (s, juce::dontSendNotification);
     analyzeBtn.setEnabled (! proc.isAnalysing());
+    if (proc.getLearnStatus().isNotEmpty() && proc.isDebleedActive() && proc.getDebleedReport().isEmpty())
+        report.setText (proc.getLearnStatus(), juce::dontSendNotification);
 }
 
 void DebleedPage::resized()

@@ -174,6 +174,7 @@ void WaveformEditor::updateScrollBar()
 
 void WaveformEditor::scrollBarMoved (juce::ScrollBar*, double newStart)
 {
+    lastInteractionMs = juce::Time::getMillisecondCounter();
     viewStart = newStart;
     repaint();
 }
@@ -200,8 +201,9 @@ void WaveformEditor::timerCallback()
         dirty = true;
     }
 
-    // follow the playhead while capturing
-    if (proc.isCaptureArmed() && proc.isTransportPlaying())
+    // follow the playhead while the host plays (unless the user is working in the editor)
+    if (proc.isTransportPlaying() && drag == Drag::None
+        && juce::Time::getMillisecondCounter() - lastInteractionMs > 3000)
     {
         const double ph = (double) proc.getPlayheadPosition();
         const double visible = getWidth() * spp;
@@ -262,8 +264,8 @@ void WaveformEditor::paint (juce::Graphics& g)
     {
         g.setColour (colours::textDim);
         g.setFont (juce::FontOptions (14.0f));
-        g.drawFittedText ("No audio captured yet.\nArm CAPTURE and play your track, then press ANALYZE.\n"
-                          "Double-click to add a trigger, drag to move, Ctrl/Cmd-drag for velocity, Delete to remove.",
+        g.drawFittedText ("Press play in your DAW - the track's audio and its hits appear here in real time.\n"
+                          "Edit any hit: double-click to add, drag to move, Ctrl/Cmd-drag for velocity, Delete to remove.",
                           area.reduced (20), juce::Justification::centred, 4);
     }
 
@@ -300,7 +302,7 @@ void WaveformEditor::paint (juce::Graphics& g)
     if (proc.isTransportPlaying())
     {
         const float x = posToX ((double) proc.getPlayheadPosition());
-        g.setColour (proc.isCaptureArmed() ? colours::record : colours::text);
+        g.setColour (colours::record);
         g.drawVerticalLine ((int) x, (float) area.getY(), (float) area.getBottom());
     }
     g.setColour (colours::outline);
@@ -325,6 +327,7 @@ void WaveformEditor::mouseMove (const juce::MouseEvent& e)
 
 void WaveformEditor::mouseDown (const juce::MouseEvent& e)
 {
+    lastInteractionMs = juce::Time::getMillisecondCounter();
     grabKeyboardFocus();
     const int idx = hitTest (e.position);
     if (e.mods.isPopupMenu())
@@ -419,6 +422,7 @@ void WaveformEditor::mouseDoubleClick (const juce::MouseEvent& e)
 
 void WaveformEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
 {
+    lastInteractionMs = juce::Time::getMillisecondCounter();
     if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
     {
         const float d = std::abs (w.deltaX) > std::abs (w.deltaY) ? w.deltaX : w.deltaY;

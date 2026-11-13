@@ -31,7 +31,7 @@ private:
 
     ThrumaProcessor& proc;
     ParamToggle dbOn;
-    juce::TextButton analyzeBtn { "ANALYZE" }, advancedBtn { "Advanced" };
+    juce::TextButton analyzeBtn { "Learn now" }, advancedBtn { "Advanced" };
     juce::Label report, linkStatus, shareLabel;
     ReductionDisplay display;
 

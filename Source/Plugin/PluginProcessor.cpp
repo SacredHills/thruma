@@ -149,9 +149,7 @@ void ThrumaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         if (! m->matches (sampleRate, debleed.getFftSize()))
             debleedModelPublisher.publish (std::make_unique<DebleedModel> (m->remapped (sampleRate, debleed.getFftSize())));
 
-    if (capture.capacity > 0 && std::abs (capture.sampleRate - sampleRate) > 0.5)
-        clearCapture();   // timeline positions no longer valid at another rate
-
+    allocateCapture();   // always listening: the track's audio is recorded while the host plays
     prepared = true;
 }
 
@@ -187,6 +185,9 @@ void ThrumaProcessor::configureEngines()
     lastInstrument = Instrument::Count;
     appliedDebleedModelSeq = 0;
     appliedLiveModelSeq = 0;
+    logExpectedNext = -1;
+    numHeld = 0;
+    allocateCapture();
     updateLatency();
 }
 
@@ -216,6 +217,105 @@ void ThrumaProcessor::timerCallback()
     liveModelPublisher.collectGarbage();
     previewPublisher.collectGarbage();
     linkedId.store (linkedSourceName.isNotEmpty() ? LinkHub::getInstance().findSource (linkedSourceName.toStdString()) : -1);
+    drainHitLog();
+    maybeAutoLearn();
+}
+
+void ThrumaProcessor::drainHitLog()
+{
+    const int ready = logFifo.getNumReady();
+    if (ready == 0) return;
+    int s1, n1, s2, n2;
+    logFifo.prepareToRead (ready, s1, n1, s2, n2);
+    const auto dedupe = (int64_t) (0.005 * currentRate);
+    auto apply = [&] (int start, int count)
+    {
+        for (int i = start; i < start + count; ++i)
+        {
+            const auto& e = logEvents[(size_t) i];
+            if (! e.isHit)
+            {
+                triggers.removeUnlockedInRange (e.a, e.b);   // this span was played again: replace old detections
+                continue;
+            }
+            if (const auto* near = triggers.findNearest (e.a, dedupe); near != nullptr && near->locked) continue;
+            triggers.add (e.a, e.velocity, e.ghost);
+        }
+    };
+    apply (s1, n1);
+    apply (s2, n2);
+    logFifo.finishedRead (n1 + n2);
+    publishTriggers();
+}
+
+void ThrumaProcessor::maybeAutoLearn()
+{
+    // Learn continuously from what the track has played: take-level dynamics and the drum's fingerprint for
+    // live detection, and (when debleed is on) decay times, bleed spectrum and reference transfer.
+    if (! prepared || analysing.load()) return;
+    const int inst = (int) apvts.getRawParameterValue (ids::instrument)->load();
+    if (inst != lastLearnInstrument) { lastLearnInstrument = inst; lastLearnLength = 0; }
+
+    const auto len = capture.length.load();
+    const auto interval = (int64_t) ((lastLearnLength == 0 ? 6.0 : 20.0) * currentRate);
+    if (len - lastLearnLength < interval) return;
+    lastLearnLength = len;
+    analysing.store (true);
+
+    const auto window = std::min<int64_t> (len, (int64_t) (90.0 * currentRate));
+    const auto from = len - window;
+    auto target = std::make_shared<std::vector<float>> (capture.data[0].begin() + from, capture.data[0].begin() + len);
+    auto ref = std::make_shared<std::vector<float>>();
+    const auto refSrc = (ReferenceSource) (int) apvts.getRawParameterValue (ids::dbReference)->load();
+    if (capture.hasRef && refSrc != ReferenceSource::None)
+    {
+        const auto& r1 = capture.data[1];
+        const auto& r2 = capture.data[2];
+        ref->resize ((size_t) window);
+        for (int64_t i = 0; i < window; ++i)
+        {
+            const float l = r1[(size_t) (from + i)], r = r2.empty() ? l : r2[(size_t) (from + i)];
+            (*ref)[(size_t) i] = refSrc == ReferenceSource::SidechainR ? r : refSrc == ReferenceSource::SidechainSum ? 0.5f * (l + r) : l;
+        }
+    }
+    ReplaceSettings rs; DebleedSettings ds; ReferenceSource rsrc; bool mo;
+    readParameters (rs, ds, rsrc, mo);
+    const bool learnDebleed = configuredDebleed;
+    const double sr = currentRate;
+    const double seconds = (double) window / sr;
+    juce::WeakReference<ThrumaProcessor> weak (this);
+
+    workers->addJob ([weak, target, ref, rs, ds, learnDebleed, sr, seconds]
+    {
+        float refDb = -150.0f;
+        SpectralTemplate tmpl;
+        const auto hits = analyseTake (target->data(), (int64_t) target->size(), sr, rs.detector, &refDb, &tmpl);
+        std::unique_ptr<DebleedAnalysis> deb;
+        if (learnDebleed && hits.size() >= 2)
+        {
+            std::vector<const float*> cands;
+            if (! ref->empty()) cands.push_back (ref->data());
+            deb = std::make_unique<DebleedAnalysis> (thruma::analyseDebleed (target->data(), (int) target->size(), cands, sr,
+                                                                             ds.instrument, ds.sensitivity));
+        }
+        juce::MessageManager::callAsync ([weak, nHits = (int) hits.size(), refDb, tmpl, deb = std::shared_ptr<DebleedAnalysis> (std::move (deb)), seconds]
+        {
+            auto* self = weak.get();
+            if (self == nullptr) return;
+            self->analysing.store (false);
+            if (nHits >= 4)
+            {
+                auto lm = std::make_unique<LiveDetectionModel>();
+                lm->refDb = refDb;
+                lm->tmpl = tmpl;
+                self->liveModelPublisher.publish (std::move (lm));
+            }
+            if (deb != nullptr)
+                self->debleedModelPublisher.publish (std::make_unique<DebleedModel> (deb->model));
+            self->learnStatus = "Learned from the last " + juce::String ((int) seconds) + " s: " + juce::String (nHits) + " hits"
+                                + (deb != nullptr ? ", bleed " + juce::String (deb->bleedLevelDb, 1) + " dB" : juce::String());
+        });
+    });
 }
 
 //==============================================================================
@@ -389,10 +489,16 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
         ref = ok ? refBuf.data() : nullptr;
     }
 
-    if (captureArmed.load (std::memory_order_relaxed) && playing && capture.capacity > 0)
+    if (playing && capture.capacity > 0)
     {
         auto origin = capture.origin.load (std::memory_order_relaxed);
-        if (origin < 0) { origin = chunkTimeline; capture.origin.store (origin, std::memory_order_release); }
+        if (origin < 0)
+        {
+            // start a little before where playback first started, so an earlier restart is still covered
+            origin = std::max<int64_t> (0, chunkTimeline - (int64_t) (10.0 * currentRate));
+            if (origin > chunkTimeline) origin = chunkTimeline;
+            capture.origin.store (origin, std::memory_order_release);
+        }
         const int64_t idx = chunkTimeline - origin;
         if (idx >= 0 && idx + n <= capture.capacity)
         {
@@ -434,6 +540,8 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
     replace.process (ch, nch, n, engineTimeline, kit, kitSeq, snap, midiTriggers.data(), numMidi,
                      [&] (const ReplaceHitInfo& h)
                      {
+                         if (! h.fromMidi && rs.source == TriggerSource::Live && engineTimeline >= 0 && numHeld < (int) heldHits.size())
+                             heldHits[(size_t) numHeld++] = { engineTimeline + h.onsetOffset, h.velocity, h.ghost };
                          hitCounter.fetch_add (1, std::memory_order_relaxed);
                          lastHitVelocity.store (h.velocity, std::memory_order_relaxed);
                          if (! midiOutOn || h.fromMidi || kit == nullptr || numPending + 2 > (int) pendingNotes.size()) return;
@@ -442,6 +550,43 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
                          pendingNotes[(size_t) numPending++] = { h.outputOffset, note, vel, true };
                          pendingNotes[(size_t) numPending++] = { h.outputOffset + noteLen, note, 0, false };
                      });
+
+    // --- live hit log for the editor: report each timeline span once all its hits are known ---
+    if (rs.enabled && rs.source == TriggerSource::Live && engineTimeline >= 0)
+    {
+        const int D = replace.getDetector().getMaxReportDelay();
+        if (engineTimeline != logExpectedNext) logFinal = engineTimeline - D;   // start / jump / loop
+        const int64_t finalUpTo = engineTimeline + n - D;
+        int start1, size1, start2, size2;
+        const int needed = 1 + numHeld;
+        if (finalUpTo > logFinal && logFifo.getFreeSpace() >= needed)
+        {
+            int written = 0;
+            auto put = [&] (const LogEvent& e)
+            {
+                logFifo.prepareToWrite (1, start1, size1, start2, size2);
+                if (size1 > 0) logEvents[(size_t) start1] = e; else if (size2 > 0) logEvents[(size_t) start2] = e;
+                logFifo.finishedWrite (size1 + size2);
+                ++written;
+            };
+            put ({ logFinal, finalUpTo, 0.0f, false, false });
+            int keep = 0;
+            for (int i = 0; i < numHeld; ++i)
+            {
+                const auto& hh = heldHits[(size_t) i];
+                if (hh.pos < finalUpTo) put ({ hh.pos, 0, hh.velocity, true, hh.ghost });
+                else heldHits[(size_t) keep++] = hh;
+            }
+            numHeld = keep;
+            logFinal = finalUpTo;
+        }
+        logExpectedNext = engineTimeline + n;
+    }
+    else
+    {
+        numHeld = 0;
+        logExpectedNext = -1;
+    }
 
     // --- auditioning / previews (always audible at unity) ---
     if (const int req = auditionRequestIdx.exchange (-1); req >= 0)
@@ -518,8 +663,21 @@ void ThrumaProcessor::rebuildKit()
     kitPublisher.publish (kitManager.buildKit (currentRate, &missingFiles));
 }
 
-void ThrumaProcessor::commitTriggerEdit (std::vector<Trigger> newList, const juce::String& actionName)
+void ThrumaProcessor::commitTriggerEdit (std::vector<Trigger> newList, const juce::String& actionName, bool userEdit)
 {
+    if (userEdit)
+    {
+        // lock everything the user added or changed, and play back the edited list from now on
+        for (auto& t : newList)
+        {
+            const auto* old = triggers.find (t.id);
+            if (old == nullptr || old->position != t.position || std::abs (old->velocity - t.velocity) > 1.0e-6f)
+                t.locked = true;
+        }
+        if (auto* src = apvts.getParameter (ids::repSource);
+            src != nullptr && (int) apvts.getRawParameterValue (ids::repSource)->load() == (int) TriggerSource::Live)
+            src->setValueNotifyingHost (src->convertTo0to1 ((float) TriggerSource::Edited));
+    }
     undoManager.beginNewTransaction (actionName);
     undoManager.perform (new TriggerEditAction (*this, triggers.getAll(), std::move (newList)));
 }
@@ -533,11 +691,11 @@ void ThrumaProcessor::publishTriggers()
 
 void ThrumaProcessor::allocateCapture()
 {
+    // called from prepareToPlay / configureEngines, i.e. never concurrently with processBlock
     const bool needRef = isSidechainConnected() || configuredLinked;
     const auto cap = (int64_t) (kCaptureSeconds * currentRate);
     if (capture.capacity == cap && capture.hasRef == needRef && std::abs (capture.sampleRate - currentRate) < 0.5) return;
 
-    suspendProcessing (true);
     capture.capacity = cap;
     capture.sampleRate = currentRate;
     capture.hasRef = needRef;
@@ -549,13 +707,7 @@ void ThrumaProcessor::allocateCapture()
     }
     capture.origin.store (-1);
     capture.length.store (0);
-    suspendProcessing (false);
-}
-
-void ThrumaProcessor::setCaptureArmed (bool armed)
-{
-    if (armed) allocateCapture();
-    captureArmed.store (armed);
+    lastLearnLength = 0;
 }
 
 void ThrumaProcessor::clearCapture()
@@ -566,6 +718,13 @@ void ThrumaProcessor::clearCapture()
     for (auto& d : capture.data) std::fill (d.begin(), d.end(), 0.0f);
     suspendProcessing (false);
     storedOverview.clear();
+    lastLearnLength = 0;
+}
+
+void ThrumaProcessor::clearAll()
+{
+    commitTriggerEdit ({}, "Clear", false);
+    clearCapture();
 }
 
 void ThrumaProcessor::buildStoredOverview()
@@ -610,8 +769,7 @@ void ThrumaProcessor::analyseCapture (std::function<void (int)> onDone)
         {
             auto* self = weak.get();
             if (self == nullptr) return;
-            self->undoManager.beginNewTransaction ("Analyze");
-            self->undoManager.perform (new TriggerEditAction (*self, self->triggers.getAll(), found));
+            self->commitTriggerEdit (found, "Re-detect", false);
             auto lm = std::make_unique<LiveDetectionModel>();
             lm->refDb = refDb;
             lm->tmpl = tmpl;

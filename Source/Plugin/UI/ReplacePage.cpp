@@ -27,17 +27,15 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
       midiOut (p.apvts, ids::midiOut, "MIDI out", "Send detected hits as MIDI notes."),
       latency (p.apvts, ids::repLatency, "Lookahead", "Accurate: 10 ms lookahead, best timing and velocity. Low latency: 3 ms.")
 {
-    for (auto* b : { &captureBtn, &analyzeBtn, &clearBtn, &undoBtn, &redoBtn, &fitBtn, &zoomInBtn, &zoomOutBtn, &exportBtn, &auditionBtn, &advancedBtn })
+    for (auto* b : { &analyzeBtn, &clearBtn, &undoBtn, &redoBtn, &fitBtn, &zoomInBtn, &zoomOutBtn, &exportBtn, &auditionBtn, &advancedBtn })
         addAndMakeVisible (b);
-    captureBtn.setClickingTogglesState (true);
-    captureBtn.setColour (juce::TextButton::buttonOnColourId, colours::record);
-    captureBtn.setTooltip ("Record the incoming audio while the host plays, for the editor and Analyze. The original track is never changed.");
-    analyzeBtn.setTooltip ("Detect all hits in the captured audio (two passes: take-level dynamics and spectral fingerprint).");
+    analyzeBtn.setTooltip ("Optional: re-run detection over everything heard so far with the current settings "
+                           "(useful after changing Sensitivity). Hits are detected live while the track plays anyway.");
+    clearBtn.setTooltip ("Forget the heard audio and all triggers.");
     exportBtn.setTooltip ("Export the trigger list as a Standard MIDI File (host tempo).");
     auditionBtn.setTooltip ("Play the replacement sample.");
     advancedBtn.setClickingTogglesState (true);
 
-    captureBtn.onClick = [this] { proc.setCaptureArmed (captureBtn.getToggleState()); updateStatus(); };
     analyzeBtn.onClick = [this]
     {
         status.setText ("Analyzing...", juce::dontSendNotification);
@@ -45,7 +43,7 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
         proc.analyseCapture ([safe] (int n)
         {
             if (safe == nullptr) return;
-            if (n < 0) safe->status.setText ("Nothing captured yet - arm CAPTURE and play.", juce::dontSendNotification);
+            if (n < 0) safe->status.setText ("Nothing heard yet - press play in your DAW.", juce::dontSendNotification);
             else
             {
                 if (auto* src = safe->proc.apvts.getParameter (ids::repSource))
@@ -57,7 +55,7 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
     };
     clearBtn.onClick = [this]
     {
-        proc.commitTriggerEdit ({}, "Clear triggers");
+        proc.clearAll();
         updateStatus();
     };
     undoBtn.onClick = [this] { proc.getUndoManager().undo(); updateStatus(); };
@@ -88,7 +86,9 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
 
     mainPanel.toBack();   // panels are backgrounds: keep every control above them
     advPanel.toBack();
-    captureBtn.setToggleState (proc.isCaptureArmed(), juce::dontSendNotification);
+    liveBadge.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    liveBadge.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (liveBadge);
     startTimerHz (8);
     updateStatus();
 }
@@ -100,7 +100,7 @@ void ReplacePage::resized()
     auto r = getLocalBounds().reduced (12);
 
     auto bar = r.removeFromTop (30);
-    captureBtn.setBounds (bar.removeFromLeft (96));
+    liveBadge.setBounds (bar.removeFromLeft (104));
     bar.removeFromLeft (6);
     analyzeBtn.setBounds (bar.removeFromLeft (90));
     bar.removeFromLeft (6);
@@ -183,8 +183,10 @@ void ReplacePage::updateStatus()
     undoBtn.setEnabled (proc.getUndoManager().canUndo());
     redoBtn.setEnabled (proc.getUndoManager().canRedo());
     analyzeBtn.setEnabled (! proc.isAnalysing());
-    if (captureBtn.getToggleState() != proc.isCaptureArmed())
-        captureBtn.setToggleState (proc.isCaptureArmed(), juce::dontSendNotification);
+    const bool playing = proc.isTransportPlaying();
+    const auto src = (TriggerSource) (int) proc.apvts.getRawParameterValue (ids::repSource)->load();
+    liveBadge.setText (playing ? "LISTENING" : "STOPPED", juce::dontSendNotification);
+    liveBadge.setColour (juce::Label::textColourId, playing ? colours::accent : colours::textDim);
 
     juce::String s;
     if (proc.isAnalysing()) s = "Analyzing...";
@@ -194,8 +196,10 @@ void ReplacePage::updateStatus()
         const double secs = c.length.load() / juce::jmax (1.0, proc.getCurrentSampleRate());
         s << (int) proc.getTriggers().size() << " triggers";
         if (wave.getNumSelected() > 0) s << " (" << wave.getNumSelected() << " selected)";
-        s << "   |   " << juce::String (secs, 1) << " s captured";
-        if (proc.isCaptureArmed()) s << (proc.isTransportPlaying() ? "  - recording" : "  - waiting for playback");
+        s << "   |   " << juce::String (secs, 1) << " s heard";
+        if (src == TriggerSource::Edited) s << "   |   playing your edited hits";
+        else if (src == TriggerSource::Live) s << "   |   live";
+        if (proc.getLearnStatus().isNotEmpty()) s << "   |   " << proc.getLearnStatus();
     }
     status.setText (s, juce::dontSendNotification);
 

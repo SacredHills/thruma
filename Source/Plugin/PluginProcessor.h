@@ -79,10 +79,9 @@ public:
     juce::StringArray getMissingSampleFiles() const { return missingFiles; }
     double getCurrentSampleRate() const { return currentRate; }
 
-    // capture & editing
-    void setCaptureArmed (bool armed);
-    bool isCaptureArmed() const { return captureArmed.load(); }
+    // listening (always on while the host plays) & editing
     void clearCapture();
+    void clearAll();   // triggers + recorded audio
     const CaptureBuffer& getCapture() const { return capture; }
     const std::vector<float>& getStoredOverview() const { return storedOverview; }   // min/max pairs per kOverviewBin
     int64_t getStoredOverviewOrigin() const { return storedOverviewOrigin; }
@@ -90,8 +89,10 @@ public:
 
     TriggerList& getTriggers() { return triggers; }
     void publishTriggers();
-    /** Replace the trigger list as one undoable step. */
-    void commitTriggerEdit (std::vector<Trigger> newList, const juce::String& actionName);
+    /** Replace the trigger list as one undoable step. A user edit marks changed triggers as locked
+        (live re-detection keeps them) and switches playback to the edited list. */
+    void commitTriggerEdit (std::vector<Trigger> newList, const juce::String& actionName, bool userEdit = true);
+    juce::String getLearnStatus() const { return learnStatus; }
     void analyseCapture (std::function<void (int numHits)> onDone);
     bool isAnalysing() const { return analysing.load(); }
     bool exportMidi (const juce::File& file) const;
@@ -139,6 +140,8 @@ private:
                        juce::MidiBuffer& midiOutBuf, const juce::Optional<juce::AudioPlayHead::PositionInfo>& pos, int64_t chunkTimeline);
     void allocateCapture();
     void buildStoredOverview();
+    void drainHitLog();
+    void maybeAutoLearn();
 
     // --- engines (audio thread) ---
     ReplaceEngine replace;
@@ -181,7 +184,19 @@ private:
 
     // --- capture ---
     CaptureBuffer capture;
-    std::atomic<bool> captureArmed { false };
+    // live hit log: audio thread -> editor (spans that became final + hits inside them)
+    struct LogEvent { int64_t a = 0, b = 0; float velocity = 0; bool isHit = false, ghost = false; };
+    static constexpr int kLogSize = 8192;
+    std::array<LogEvent, kLogSize> logEvents {};
+    juce::AbstractFifo logFifo { kLogSize };
+    struct HeldHit { int64_t pos; float velocity; bool ghost; };
+    std::array<HeldHit, 256> heldHits {};
+    int numHeld = 0;
+    int64_t logFinal = 0, logExpectedNext = -1;
+    // automatic learning
+    int64_t lastLearnLength = 0;
+    int lastLearnInstrument = -1;
+    juce::String learnStatus;
     std::vector<float> storedOverview;
     int64_t storedOverviewOrigin = 0;
 

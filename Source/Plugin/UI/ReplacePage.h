@@ -26,9 +26,9 @@ private:
     ThrumaProcessor& proc;
 
     // waveform toolbar
-    juce::TextButton captureBtn { "CAPTURE" }, analyzeBtn { "ANALYZE" }, clearBtn { "Clear" }, undoBtn { "Undo" }, redoBtn { "Redo" },
+    juce::TextButton analyzeBtn { "Re-detect" }, clearBtn { "Clear" }, undoBtn { "Undo" }, redoBtn { "Redo" },
                      fitBtn { "Fit" }, zoomInBtn { "+" }, zoomOutBtn { "-" }, exportBtn { "Export MIDI" }, auditionBtn { "Audition" };
-    juce::Label status;
+    juce::Label status, liveBadge;
     WaveformEditor wave;
 
     // main controls

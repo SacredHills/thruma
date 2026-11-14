@@ -79,6 +79,10 @@ public:
 
     KitManager& getKitManager() { return kitManager; }
     void rebuildKit (bool userChange = true);   // userChange: the project needs saving
+    /** Long kit edits (loading samples, importing a kit folder, loading a kit file) run off the message thread,
+        then the kit is rebuilt; onDone runs on the message thread. Jobs run one after another. */
+    void runKitJob (std::function<void (KitManager&)> job, std::function<void()> onDone = {});
+    bool isLoadingKit() const { return pendingKitJobs.load() > 0; }
     juce::StringArray getMissingSampleFiles() const { return missingFiles; }
     double getCurrentSampleRate() const { return currentRate; }
 
@@ -291,6 +295,8 @@ private:
     bool blockPlaying = false, hostTimelineSeen = false;
     int uiTab = 1;   // REPLACE
     std::unique_ptr<juce::ThreadPool> workers;
+    std::unique_ptr<juce::ThreadPool> kitLoader;   // one job at a time
+    std::atomic<int> pendingKitJobs { 0 };
 
     HostBridge hostBridge;
     OfflineSource offlineSource = OfflineSource::None;

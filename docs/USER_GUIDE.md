@@ -119,9 +119,10 @@ The display shows the current reduction per frequency band.
 The kit as a picture, like a drum sampler.
 
 - **Click a drum** to play it: harder towards the middle, softer at the edge (**Shift** = soft).
-- **Right-click a drum** to load samples, add samples, load a whole folder, open its layers on the SAMPLES page, track it on REPLACE, or clear it. The submenu lists its samples; click one to hear it.
+- **Right-click a drum** to load samples, add samples, load a whole folder, change its **MIDI note** (General MIDI list, or any note; a drum already on that note swaps with it), open its layers on the SAMPLES page, track it on REPLACE, or clear it. The submenu lists its samples; click one to hear it.
 - **Drop audio files** (or a folder) on a drum to load them into it. Drop a folder anywhere else to import it as a whole kit.
-- **Drums light up** when they are hit: by tracking, MIDI clips, an imported MIDI file or your clicks.
+- **Loading:** samples load in the background with a progress bar; the window stays responsive.
+- **Drums light up** (white) when they are hit: by tracking, MIDI clips, an imported MIDI file or your clicks.
 - **Two crashes:** the left one is **Crash** (MIDI 49), the right one **Crash 2** (MIDI 57). Kit folders with files named "Crash 2" / "Crash_B" / "Right Crash" load onto Crash 2.
 - **Pads:** kit sounds that are not one of the drums (cowbell, tambourine, stacks, FX...) go on the pads under the picture, up to 32; more rows appear as you add them. **Import Kit Folder…** puts them there automatically, named after their folder or file, each with its own MIDI note. Click **+ Pad** to load a sound onto a new pad; right-click a pad to rename or remove it (the pads after it move up).
 

@@ -85,13 +85,15 @@ void KitManager::setKitName (const juce::String& n) { std::lock_guard<std::recur
 
 SamplePtr KitManager::loadSample (const juce::File& f)
 {
-    std::lock_guard<std::recursive_mutex> l (mutex);
     const auto key = f.getFullPathName();
     const auto mtime = f.getLastModificationTime();
-    if (auto it = cache.find (key); it != cache.end() && it->second.first == mtime)
-        return it->second.second;
-
+    {
+        std::lock_guard<std::recursive_mutex> l (mutex);
+        if (auto it = cache.find (key); it != cache.end() && it->second.first == mtime) { tick(); return it->second.second; }
+    }
+    // decode without holding the lock (the UI keeps reading the kit while samples load)
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+    tick();
     if (reader == nullptr || reader->lengthInSamples <= 0) return nullptr;
 
     const int len = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 30.0));  // cap 30 s
@@ -104,20 +106,21 @@ SamplePtr KitManager::loadSample (const juce::File& f)
         ch[(size_t) c].assign (buf.getReadPointer (c), buf.getReadPointer (c) + len);
 
     auto s = SampleData::create (key.toStdString(), f.getFileNameWithoutExtension().toStdString(), std::move (ch), reader->sampleRate);
+    std::lock_guard<std::recursive_mutex> l (mutex);
     cache[key] = { mtime, s };
     return s;
 }
 
 void KitManager::assignFiles (int inst, const juce::Array<juce::File>& files)
 {
-    std::lock_guard<std::recursive_mutex> l (mutex);
-    givePadANote (inst);
     std::vector<SamplePtr> samples;
     std::map<const SampleData*, juce::File> back;
-    for (auto& f : files)
+    for (auto& f : files)   // loading happens outside the lock
         if (auto s = loadSample (f)) { samples.push_back (s); back[s.get()] = f; }
-
     auto layers = buildLayersByLoudness (samples);
+
+    std::lock_guard<std::recursive_mutex> l (mutex);
+    givePadANote (inst);
     auto& slot = slots[(size_t) inst];
     slot.layers.clear();
     for (auto& L : layers)
@@ -202,7 +205,6 @@ void KitManager::clearAll()
 
 int KitManager::importFolder (const juce::File& folder, juce::StringArray* unassigned)
 {
-    std::lock_guard<std::recursive_mutex> l (mutex);
     std::array<juce::Array<juce::File>, kNumInstruments> byInst;
     std::map<juce::String, juce::Array<juce::File>> others;   // sounds that are not one of the drums -> pads
     int count = 0;
@@ -245,6 +247,7 @@ int KitManager::importFolder (const juce::File& folder, juce::StringArray* unass
     }
     // Tom names are ambiguous ("tom" -> Tom 1); spread several distinct "Tom" files across toms only if
     // the files themselves carry numbers - otherwise keep them on Tom 1.
+    if (getProgressPhase() != LoadPhase::None) setProgressTotal (count);
     for (int i = 0; i < kNumInstruments; ++i)
         if (! byInst[(size_t) i].isEmpty())
             assignFiles (i, byInst[(size_t) i]);
@@ -252,15 +255,18 @@ int KitManager::importFolder (const juce::File& folder, juce::StringArray* unass
     for (auto& [key, files] : others)
     {
         int pad = -1;
-        for (int i = kNumInstruments; i < kNumKitSlots && pad < 0; ++i)
-            if (slots[(size_t) i].isEmpty()) pad = i;
+        {
+            std::lock_guard<std::recursive_mutex> l (mutex);
+            for (int i = kNumInstruments; i < kNumKitSlots && pad < 0; ++i)
+                if (slots[(size_t) i].isEmpty() && slots[(size_t) i].name.isEmpty()) pad = i;
+            if (pad >= 0) slots[(size_t) pad].name = key;
+        }
         if (pad < 0)
         {
             if (unassigned != nullptr) for (auto& f : files) unassigned->add (f.getFullPathName());
             count -= files.size();
             continue;
         }
-        slots[(size_t) pad].name = key;
         assignFiles (pad, files);
     }
     return count;
@@ -372,27 +378,44 @@ bool KitManager::loadKitFile (const juce::File& f)
 
 SamplePtr KitManager::playbackSample (const juce::File& f, double rate)
 {
-    std::lock_guard<std::recursive_mutex> l (mutex);
     auto native = loadSample (f);
     if (native == nullptr) return nullptr;
     if (std::abs (native->playRate - rate) < 1e-6) return native;
     const auto key = f.getFullPathName() + "|" + juce::String (rate) + "|" + juce::String (f.getLastModificationTime().toMilliseconds());
-    if (auto it = playCache.find (key); it != playCache.end()) return it->second;
-    SamplePtr s = native->withPlaybackRate (rate);
+    {
+        std::lock_guard<std::recursive_mutex> l (mutex);
+        if (auto it = playCache.find (key); it != playCache.end()) return it->second;
+    }
+    SamplePtr s = native->withPlaybackRate (rate);   // outside the lock
+    std::lock_guard<std::recursive_mutex> l (mutex);
     playCache[key] = s;
     return s;
 }
 
-std::unique_ptr<Kit> KitManager::buildKit (double rate, juce::StringArray* missing)
+int KitManager::countFiles() const
 {
     std::lock_guard<std::recursive_mutex> l (mutex);
+    int n = 0;
+    for (auto& s : slots) for (auto& L : s.layers) n += L.files.size();
+    return n;
+}
+
+std::unique_ptr<Kit> KitManager::buildKit (double rate, juce::StringArray* missing)
+{
+    std::array<SlotModel, kNumKitSlots> model;
+    juce::String name;
+    {
+        std::lock_guard<std::recursive_mutex> l (mutex);   // copy the model; load the samples without the lock
+        model = slots;
+        name = kitName;
+    }
     auto kit = std::make_unique<Kit>();
-    kit->name = kitName.toStdString();
+    kit->name = name.toStdString();
     kit->playRate = rate;
     auto& native = *kit;
     for (int i = 0; i < kNumKitSlots; ++i)
     {
-        const auto& m = slots[(size_t) i];
+        const auto& m = model[(size_t) i];
         auto& slot = native.slots[(size_t) i];
         slot.midiNote = m.midiNote;
         slot.rrMode = m.rrMode;

@@ -29,7 +29,7 @@ namespace
         if (inShell (x, y, 988, 1260, 448, 28, 735, 24))  return (int) I::Tom3;
         if (inShell (x, y, 1240, 1558, 470, 30, 772, 26)) return (int) I::Tom4;
         if (inEllipse (x, y, 810, 615, 195, 188) || inRect (x, y, 755, 712, 865, 900)) return (int) I::Kick;
-        if (inEllipse (x, y, 240, 292, 172, 50) || inRect (x, y, 170, 770, 325, 900)) return (int) I::HiHat;
+        if (inEllipse (x, y, 240, 292, 172, 50)) return (int) I::HiHat;   // cymbals (the pedal is clickable, never lit)
         if (inEllipse (x, y, 559, 207, 102, 28))   return (int) I::Splash;
         if (inEllipse (x, y, 447, 133, 182, 52))   return (int) I::Crash;
         if (inEllipse (x, y, 1097, 133, 172, 54))  return (int) I::Crash2;
@@ -54,7 +54,9 @@ PlayerPage::PlayerPage (ThrumaProcessor& p) : proc (p)
         chooser = std::make_unique<juce::FileChooser> ("Load kit", juce::File::getSpecialLocation (juce::File::userMusicDirectory), "*.thrumakit;*.json");
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc)
         {
-            if (safe != nullptr && fc.getResult() != juce::File() && safe->proc.getKitManager().loadKitFile (fc.getResult())) safe->kitEdited();
+            if (safe == nullptr || fc.getResult() == juce::File()) return;
+            const auto file = fc.getResult();
+            safe->proc.runKitJob ([file] (KitManager& km) { km.loadKitFile (file); }, [safe] { if (safe != nullptr) safe->kitLoaded(); });
         });
     };
     kitLabel.setFont (juce::FontOptions (17.0f, juce::Font::bold));
@@ -154,7 +156,7 @@ void PlayerPage::buildMasks()
                 {
                     const int sx = m.area.getX() + x, sy = m.area.getY() + y;
                     if (owner[(size_t) (sy * kitW + sx)] != d) continue;
-                    dst.setPixelColour (x, y, colours::hitGlow.withAlpha (src.getPixelColour (sx, sy).getFloatAlpha()));
+                    dst.setPixelColour (x, y, juce::Colours::white.withAlpha (src.getPixelColour (sx, sy).getFloatAlpha()));
                 }
         }
         // a soft glow around it: blurred at quarter size (cheap), drawn scaled up
@@ -198,6 +200,7 @@ int PlayerPage::slotAt (juce::Point<float> p) const
                 if (x < 0 || y < 0 || x >= kitW || y >= kitH) continue;
                 if (const auto o = owner[(size_t) (y * kitW + x)]; o != kNone) return (int) o;
             }
+    if (inRect ((float) x0, (float) y0, 170, 770, 325, 900)) return (int) Instrument::HiHat;   // hi-hat pedal
     return -1;
 }
 
@@ -267,9 +270,9 @@ void PlayerPage::paint (juce::Graphics& g)
         const float gl = glow[(size_t) slot];
         if (gl > 0.0f)
         {
-            g.setOpacity (juce::jmin (1.0f, 0.9f * gl));
+            g.setOpacity (0.45f * gl);
             g.drawImage (m.glow, toScreen (m.glowArea));
-            g.setOpacity (0.55f * gl);
+            g.setOpacity (0.275f * gl);
             g.drawImage (m.lit, toScreen (m.area));
         }
         if (slot == dropSlot)
@@ -292,7 +295,7 @@ void PlayerPage::paint (juce::Graphics& g)
         const auto m = km.getSlot (slot);
         const bool empty = m.isEmpty() && m.name.isEmpty();
         const float gl = glow[(size_t) slot];
-        g.setColour (juce::Colours::black.withAlpha (empty ? 0.35f : 0.6f).interpolatedWith (colours::hitGlow.withAlpha (0.85f), 0.6f * gl));
+        g.setColour (juce::Colours::black.withAlpha (empty ? 0.35f : 0.6f).interpolatedWith (juce::Colours::white.withAlpha (0.85f), 0.3f * gl));
         g.fillRoundedRectangle (b, 8.0f);
         g.setColour (slot == dropSlot ? colours::trigger : colours::outline);
         if (empty)
@@ -356,6 +359,21 @@ void PlayerPage::showMenu (int slot)
     menu.addItem (2, "Add samples...", ! m.isEmpty());
     menu.addItem (3, "Load folder...");
     menu.addSeparator();
+    {
+        // MIDI note: General MIDI drum notes, the current one ticked; one used by another drum or pad is swapped
+        juce::PopupMenu notes;
+        for (int n = 27; n <= 87; ++n)
+        {
+            juce::String label = juce::MidiMessage::getMidiNoteName (n, true, true, 3) + "  (" + juce::String (n) + ")  " + juce::MidiMessage::getRhythmInstrumentName (n);
+            for (int other = 0; other < kNumKitSlots; ++other)
+                if (other != slot && km.getSlot (other).midiNote == n && (other < kNumInstruments || ! km.getSlot (other).isEmpty()))
+                    label << "  - now " << km.getSlotName (other);
+            notes.addItem (1000 + n, label, true, m.midiNote == n);
+        }
+        notes.addSeparator();
+        notes.addItem (999, "Other note...");
+        menu.addSubMenu ("MIDI note: " + (m.midiNote >= 0 ? juce::MidiMessage::getMidiNoteName (m.midiNote, true, true, 3) + " (" + juce::String (m.midiNote) + ")" : juce::String ("none")), notes);
+    }
     menu.addItem (4, "Edit layers in SAMPLES...");
     if (! isPadSlot (slot)) menu.addItem (5, "Track this drum on REPLACE");
     else menu.addItem (6, "Rename pad...");
@@ -403,8 +421,38 @@ void PlayerPage::showMenu (int slot)
             }), true);
         }
         else if (r == 7) { kitm.clearSlot (slot); self.kitEdited(); }
+        else if (r >= 1000 && r <= 1127) self.setMidiNote (slot, r - 1000);
+        else if (r == 999)
+        {
+            auto* w = new juce::AlertWindow ("MIDI note for " + kitm.getSlotName (slot), "Note number (0 - 127)", juce::MessageBoxIconType::NoIcon, &self);
+            w->addTextEditor ("note", juce::String (juce::jmax (0, kitm.getSlot (slot).midiNote)));
+            w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+            w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+            w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, slot, w] (int ok)
+            {
+                if (safe != nullptr && ok == 1) safe->setMidiNote (slot, juce::jlimit (0, 127, w->getTextEditorContents ("note").getIntValue()));
+            }), true);
+        }
         else if (r >= 100 && r - 100 < (int) fileIds.size()) self.proc.previewSample (fileIds[(size_t) (r - 100)]);
     });
+}
+
+void PlayerPage::setMidiNote (int slot, int note)
+{
+    auto& km = proc.getKitManager();
+    auto mine = km.getSlot (slot);
+    const int old = mine.midiNote;
+    // a drum or pad already on that note takes this one's old note, so no two play from the same key
+    for (int other = 0; other < kNumKitSlots; ++other)
+        if (other != slot && km.getSlot (other).midiNote == note)
+        {
+            auto o = km.getSlot (other);
+            o.midiNote = old;
+            km.setSlot (other, o);
+        }
+    mine.midiNote = note;
+    km.setSlot (slot, mine);
+    kitEdited();
 }
 
 void PlayerPage::chooseFiles (int slot, bool add, bool folder)
@@ -424,8 +472,8 @@ void PlayerPage::chooseFiles (int slot, bool add, bool folder)
         if (results.isEmpty()) return;
         if (folder && slot < 0)
         {
-            safe->proc.getKitManager().importFolder (results[0]);
-            safe->kitEdited();
+            const auto folder = results[0];
+            safe->proc.runKitJob ([folder] (KitManager& km) { km.importFolder (folder); }, [safe] { if (safe != nullptr) safe->kitLoaded(); });
             return;
         }
         juce::Array<juce::File> files;
@@ -453,13 +501,20 @@ void PlayerPage::assign (int slot, const juce::Array<juce::File>& files, bool ad
         km.setSlotName (slot, files.size() > 1 && f.getParentDirectory().getFileName().isNotEmpty() ? f.getParentDirectory().getFileName()
                                                                                                    : f.getFileNameWithoutExtension());
     }
-    km.assignFiles (slot, all);
-    kitEdited();
+    juce::Component::SafePointer<PlayerPage> safe (this);
+    proc.runKitJob ([slot, all] (KitManager& k) { k.setProgressTotal (all.size()); k.assignFiles (slot, all); },
+                    [safe] { if (safe != nullptr) safe->kitLoaded(); });
 }
 
 void PlayerPage::kitEdited()
 {
-    proc.rebuildKit();
+    juce::Component::SafePointer<PlayerPage> safe (this);
+    proc.runKitJob ({}, [safe] { if (safe != nullptr) safe->kitLoaded(); });
+    kitLoaded();   // the model changed already
+}
+
+void PlayerPage::kitLoaded()
+{
     if (onKitChanged) onKitChanged();
     repaint();
 }
@@ -480,7 +535,12 @@ void PlayerPage::filesDropped (const juce::StringArray& paths, int x, int y)
         juce::File f (path);
         if (f.isDirectory())
         {
-            if (slot < 0) { proc.getKitManager().importFolder (f); kitEdited(); return; }   // a whole kit
+            if (slot < 0)   // a whole kit
+            {
+                juce::Component::SafePointer<PlayerPage> safe (this);
+                proc.runKitJob ([f] (KitManager& km) { km.importFolder (f); }, [safe] { if (safe != nullptr) safe->kitLoaded(); });
+                return;
+            }
             for (const auto& entry : juce::RangedDirectoryIterator (f, true, "*.wav;*.wave;*.aif;*.aiff;*.flac")) files.add (entry.getFile());
         }
         else if (KitManager::isAudioFile (f)) files.add (f);

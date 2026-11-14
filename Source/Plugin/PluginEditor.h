@@ -11,6 +11,17 @@
 namespace thruma
 {
 
+/** Shown over the whole window while samples load. */
+class LoadingOverlay : public juce::Component
+{
+public:
+    explicit LoadingOverlay (ThrumaProcessor& p) : proc (p) {}
+    void paint (juce::Graphics&) override;
+private:
+    ThrumaProcessor& proc;
+    float spin = 0.0f;
+};
+
 class ThrumaEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -40,6 +51,8 @@ private:
     ui::HitLed hitLed;
     juce::Label latencyLabel;
     juce::Image logo;
+    LoadingOverlay loading { proc };
+    juce::uint32 loadingSince = 0;
     int lastHits = 0;
     int currentTab = 0;
 };

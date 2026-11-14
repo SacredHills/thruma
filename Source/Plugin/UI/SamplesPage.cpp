@@ -184,11 +184,17 @@ SamplesPage::SamplesPage (ThrumaProcessor& p) : proc (p)
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [safe] (const juce::FileChooser& fc)
         {
             if (safe == nullptr || fc.getResult() == juce::File()) return;
-            juce::StringArray unassigned;
-            const int n = safe->proc.getKitManager().importFolder (fc.getResult(), &unassigned);
-            safe->hint.setText ("Imported " + juce::String (n) + " files" + (unassigned.isEmpty() ? juce::String() : ", " + juce::String (unassigned.size()) + " not recognised by name"),
-                                juce::dontSendNotification);
-            safe->kitChanged();
+            auto unassigned = std::make_shared<juce::StringArray>();
+            auto n = std::make_shared<int> (0);
+            const auto folder = fc.getResult();
+            safe->proc.runKitJob ([folder, unassigned, n] (KitManager& km) { *n = km.importFolder (folder, unassigned.get()); },
+                                  [safe, unassigned, n]
+            {
+                if (safe == nullptr) return;
+                safe->hint.setText ("Imported " + juce::String (*n) + " files" + (unassigned->isEmpty() ? juce::String() : ", " + juce::String (unassigned->size()) + " not recognised by name"),
+                                    juce::dontSendNotification);
+                safe->refreshNow();
+            });
         });
     };
     loadBtn.onClick = [this]
@@ -198,9 +204,14 @@ SamplesPage::SamplesPage (ThrumaProcessor& p) : proc (p)
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc)
         {
             if (safe == nullptr || fc.getResult() == juce::File()) return;
-            if (! safe->proc.getKitManager().loadKitFile (fc.getResult()))
-                safe->hint.setText ("Not a Thruma kit file.", juce::dontSendNotification);
-            safe->kitChanged();
+            auto ok = std::make_shared<bool> (false);
+            const auto file = fc.getResult();
+            safe->proc.runKitJob ([file, ok] (KitManager& km) { *ok = km.loadKitFile (file); }, [safe, ok]
+            {
+                if (safe == nullptr) return;
+                if (! *ok) safe->hint.setText ("Not a Thruma kit file.", juce::dontSendNotification);
+                safe->refreshNow();
+            });
         });
     };
     saveBtn.onClick = [this]
@@ -456,8 +467,10 @@ void SamplesPage::addFiles (const juce::Array<juce::File>& files)
     juce::Array<juce::File> all;
     for (auto& l : km.getSlot (selectedInstrument).layers) all.addArray (l.files);
     for (auto& f : files) all.addIfNotAlreadyThere (f);
-    km.assignFiles (selectedInstrument, all);
-    kitChanged();
+    const int slot = selectedInstrument;
+    juce::Component::SafePointer<SamplesPage> safe (this);
+    proc.runKitJob ([slot, all] (KitManager& k) { k.setProgressTotal (all.size()); k.assignFiles (slot, all); },
+                    [safe] { if (safe != nullptr) safe->refreshNow(); });
 }
 
 void SamplesPage::filesDropped (const juce::StringArray& files, int, int)
@@ -468,18 +481,24 @@ void SamplesPage::filesDropped (const juce::StringArray& files, int, int)
         juce::File file (f);
         if (file.isDirectory())
         {
-            proc.getKitManager().importFolder (file);
+            juce::Component::SafePointer<SamplesPage> safe (this);
+            proc.runKitJob ([file] (KitManager& km) { km.importFolder (file); }, [safe] { if (safe != nullptr) safe->refreshNow(); });
             continue;
         }
         if (KitManager::isAudioFile (file)) fs.add (file);
     }
     if (! fs.isEmpty()) addFiles (fs);
-    else kitChanged();
 }
 
 void SamplesPage::kitChanged()
 {
-    proc.rebuildKit();
+    refreshNow();   // the model changed already; the audio kit follows in the background
+    juce::Component::SafePointer<SamplesPage> safe (this);
+    proc.runKitJob ({}, [safe] { if (safe != nullptr) safe->refreshNow(); });
+}
+
+void SamplesPage::refreshNow()
+{
     const auto missing = proc.getMissingSampleFiles();
     if (! missing.isEmpty())
         hint.setText (juce::String (missing.size()) + " sample file(s) missing - they are shown in red.", juce::dontSendNotification);

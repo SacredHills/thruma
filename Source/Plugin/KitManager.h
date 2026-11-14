@@ -6,6 +6,7 @@
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
+#include <atomic>
 #include <map>
 #include <mutex>
 
@@ -80,6 +81,16 @@ public:
     std::unique_ptr<Kit> buildKit (double playbackRate, juce::StringArray* missing = nullptr);
 
     static bool isAudioFile (const juce::File& f);
+
+    // --- progress of a long load (any thread) ---
+    enum class LoadPhase : int { None = 0, Samples = 1, Kit = 2 };
+    void beginProgress (LoadPhase phase, int total) noexcept { progressDone.store (0); progressTotal.store (total); progressPhase.store ((int) phase); }
+    void setProgressTotal (int total) noexcept { progressTotal.store (total); }
+    void endProgress() noexcept { progressPhase.store (0); }
+    LoadPhase getProgressPhase() const noexcept { return (LoadPhase) progressPhase.load(); }
+    int getProgressDone() const noexcept { return progressDone.load(); }
+    int getProgressTotal() const noexcept { return progressTotal.load(); }
+    int countFiles() const;
     juce::AudioFormatManager& getFormatManager() { return formats; }
 
 private:
@@ -90,6 +101,8 @@ private:
     juce::String kitName { "Untitled Kit" };
     std::map<juce::String, std::pair<juce::Time, SamplePtr>> cache;   // path -> (mtime, sample)
     std::map<juce::String, SamplePtr> playCache;                       // path|rate -> resampled sample
+    std::atomic<int> progressDone { 0 }, progressTotal { 0 }, progressPhase { 0 };
+    void tick() noexcept { if (progressPhase.load (std::memory_order_relaxed) != 0) progressDone.fetch_add (1, std::memory_order_relaxed); }
 };
 
 } // namespace thruma

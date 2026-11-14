@@ -629,6 +629,45 @@ int main()
         check (snareHits() > tracked && ! pm->isMidiDriving(), "two seconds after the MIDI stops, tracking resumes");
     }
 
+    // ---- 5f) loading samples in the background, with progress ----
+    {
+        std::unique_ptr<ThrumaProcessor> pl (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH phl; pl->setPlayHead (&phl); pl->prepareToPlay (44100.0, 512);   // a different rate: samples get converted too
+        juce::Array<juce::File> files;
+        juce::File d = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("thruma_loadtest");
+        d.deleteRecursively(); d.createDirectory();
+        for (int k = 0; k < 40; ++k)
+        {
+            juce::File f = d.getChildFile ("Snare_" + juce::String (k) + ".wav");
+            juce::AudioBuffer<float> b (2, 48000 * 2);
+            for (int i = 0; i < b.getNumSamples(); ++i) { const float v = (0.2f + 0.02f * (float) k) * std::sin ((float) i * 0.07f) * std::exp (-(float) i / 9000.0f); b.setSample (0, i, v); b.setSample (1, i, v); }
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (f), 48000.0, 2, 24, {}, 0));
+            w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+            files.add (f);
+        }
+        bool done = false;
+        pl->runKitJob ([files] (KitManager& km) { km.setProgressTotal (files.size()); km.assignFiles ((int) Instrument::Snare, files); }, [&] { done = true; });
+        int maxDone = 0, sawTotal = 0;
+        double worstMs = 0.0;
+        bool sawLoading = false;
+        for (int i = 0; i < 600 && ! done; ++i)
+        {
+            sawLoading = sawLoading || pl->isLoadingKit();
+            maxDone = std::max (maxDone, pl->getKitManager().getProgressDone());
+            sawTotal = std::max (sawTotal, pl->getKitManager().getProgressTotal());
+            const double t0 = juce::Time::getMillisecondCounterHiRes();
+            pl->getKitManager().getSlot ((int) Instrument::Snare);   // what the UI does while it loads
+            worstMs = std::max (worstMs, juce::Time::getMillisecondCounterHiRes() - t0);
+            pump (10);
+        }
+        int files2 = 0;
+        for (auto& l : pl->getKitManager().getSlot ((int) Instrument::Snare).layers) files2 += l.files.size();
+        check (done && sawLoading && ! pl->isLoadingKit() && files2 == 40, "40 samples load in the background, then the kit is ready");
+        check (sawTotal >= 40 && maxDone > 0, "the loading bar counts files (" + juce::String (maxDone) + " / " + juce::String (sawTotal) + " seen)");
+        check (worstMs < 40.0, "the editor never waits on the loading (worst " + juce::String (worstMs, 1) + " ms)");
+    }
+
     // ---- 6) stopped host: the playhead stays put ----
     {
         std::unique_ptr<ThrumaProcessor> p5 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));

@@ -38,6 +38,8 @@ ThrumaEditor::ThrumaEditor (ThrumaProcessor& p)
     latencyLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (latencyLabel);
 
+    addChildComponent (loading);   // last: on top of everything
+
     setResizable (true, true);
     setResizeLimits (940, 620, 2000, 1400);
     setSize (1080, 700);
@@ -113,10 +115,51 @@ void ThrumaEditor::resized()
 
     for (juce::Component* p : std::initializer_list<juce::Component*> { &debleedPage, &replacePage, &samplesPage, &playerPage, &mixerPage })
         p->setBounds (r);
+    loading.setBounds (getLocalBounds());
+}
+
+void LoadingOverlay::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    auto& km = proc.getKitManager();
+    const auto phase = km.getProgressPhase();
+    const int done = km.getProgressDone(), total = km.getProgressTotal();
+    const auto box = getLocalBounds().withSizeKeepingCentre (380, 96).toFloat();
+    g.setColour (ui::colours::panelRaised);
+    g.fillRoundedRectangle (box, 10.0f);
+    g.setColour (ui::colours::outline);
+    g.drawRoundedRectangle (box, 10.0f, 1.0f);
+
+    juce::String text = phase == KitManager::LoadPhase::Kit ? "Preparing kit" : "Loading samples";
+    if (total > 0) text << "  " << juce::jmin (done, total) << " / " << total;
+    g.setColour (ui::colours::text);
+    g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+    g.drawText (text, box.reduced (20.0f, 14.0f).removeFromTop (24.0f), juce::Justification::centredLeft);
+
+    auto bar = box.reduced (20.0f, 0.0f).withTrimmedTop (54.0f).withHeight (10.0f);
+    g.setColour (ui::colours::background);
+    g.fillRoundedRectangle (bar, 5.0f);
+    g.setColour (ui::colours::accent);
+    if (total > 0)
+        g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, (float) done / (float) total)), 5.0f);
+    else
+    {
+        // amount unknown yet (scanning a folder): a moving block
+        spin = std::fmod (spin + 0.03f, 1.0f);
+        const float w = bar.getWidth() * 0.25f;
+        g.fillRoundedRectangle (bar.withWidth (w).withX (bar.getX() + (bar.getWidth() - w) * (0.5f + 0.5f * std::sin (spin * juce::MathConstants<float>::twoPi))), 5.0f);
+    }
 }
 
 void ThrumaEditor::timerCallback()
 {
+    // the loading bar appears only for loads that take a moment (quick edits don't flash it)
+    const auto now = juce::Time::getMillisecondCounter();
+    if (! proc.isLoadingKit()) loadingSince = 0;
+    else if (loadingSince == 0) loadingSince = now;
+    const bool showLoading = loadingSince != 0 && now - loadingSince > 250;
+    if (showLoading != loading.isVisible()) loading.setVisible (showLoading);
+    if (loading.isVisible()) loading.repaint();
     inMeter.setLevel (proc.inputPeak.load());
     outMeter.setLevel (proc.outputPeak.load());
     const int hits = proc.hitCounter.load();

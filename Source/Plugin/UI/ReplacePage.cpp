@@ -261,8 +261,8 @@ void ReplacePage::filesDropped (const juce::StringArray& files, int, int)
     juce::Array<juce::File> all;
     for (auto& l : proc.getKitManager().getSlot (currentSlot()).layers) all.addArray (l.files);
     for (auto& f : files) if (KitManager::isAudioFile (juce::File (f))) all.addIfNotAlreadyThere (juce::File (f));
-    proc.getKitManager().assignFiles (currentSlot(), all);
-    proc.rebuildKit();
+    const int slot = currentSlot();
+    proc.runKitJob ([slot, all] (KitManager& km) { km.setProgressTotal (all.size()); km.assignFiles (slot, all); });
 }
 
 } // namespace thruma::ui

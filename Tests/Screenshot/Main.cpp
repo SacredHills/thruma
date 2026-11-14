@@ -82,6 +82,26 @@ int main (int argc, char** argv)
             if (p == (s.length * 6 / 10) / 256 * 256) { juce::Thread::sleep (300); snap ("REPLACE", "replace_live.png"); }
             if (p == (s.length * 7 / 10) / 256 * 256) { tp->auditionSlot (thruma::kNumInstruments, 0.9f); tp->auditionSlot ((int) thruma::Instrument::Kick, 0.9f); snap ("PLAYER", "player.png"); }
             if (p == (s.length * 8 / 10) / 256 * 256) { snap ("SAMPLES", "samples.png"); }
+            if (p == (s.length * 85 / 100) / 256 * 256)
+            {
+                juce::Array<juce::File> many;
+                for (int k = 0; k < 60; ++k)
+                {
+                    juce::File f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("thruma_shot").getChildFile ("Ride_long_" + juce::String (k) + ".wav");
+                    if (! f.existsAsFile())
+                    {
+                        juce::AudioBuffer<float> b (2, 48000 * 12);
+                        for (int i = 0; i < b.getNumSamples(); ++i) { const float v = 0.3f * std::sin ((float) i * (0.02f + 0.0003f * (float) k)) * std::exp (-(float) i / 90000.0f); b.setSample (0, i, v); b.setSample (1, i, v); }
+                        juce::WavAudioFormat fmt;
+                        std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (f), 44100.0, 2, 24, {}, 0));
+                        w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+                    }
+                    many.add (f);
+                }
+                tp->runKitJob ([many] (thruma::KitManager& km) { km.setProgressTotal (many.size()); km.assignFiles ((int) thruma::Instrument::Ride, many); });
+                juce::Thread::sleep (450);
+                snap ("PLAYER", "loading.png");
+            }
             if (p == (s.length * 9 / 10) / 256 * 256)
             {
                 tp->getKitManager().setMix ((int) thruma::Instrument::Snare, -3.0f, -0.3f, false, false);

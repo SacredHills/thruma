@@ -58,7 +58,8 @@ public:
     // used by LayerRow
     ThrumaProcessor& getProcessor() { return proc; }
     int getSelectedInstrument() const { return selectedInstrument; }
-    void kitChanged();          // rebuild audio kit + refresh UI
+    void kitChanged();          // rebuild audio kit (in the background) + refresh UI
+    void refreshNow();          // refresh the lists from the kit model
     void refreshDetail();
     /** Show a drum or pad (kit slot). */
     void selectSlot (int slot);

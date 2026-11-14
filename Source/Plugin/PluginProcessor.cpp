@@ -98,6 +98,7 @@ ThrumaProcessor::ThrumaProcessor()
     kitPublisher.publish (kitManager.buildKit (currentRate));
     triggerPublisher.publish (std::make_unique<TriggerSnapshot>());
     workers = std::make_unique<juce::ThreadPool> (1);
+    kitLoader = std::make_unique<juce::ThreadPool> (1);
     startTimerHz (20);
 }
 
@@ -107,6 +108,8 @@ ThrumaProcessor::~ThrumaProcessor()
     cancelPendingUpdate();
     workers->removeAllJobs (true, 20000);
     workers.reset();
+    kitLoader->removeAllJobs (true, 20000);
+    kitLoader.reset();
     for (auto* id : { ids::dbOn, ids::dbReference, ids::repLatency, ids::instrument })
         apvts.removeParameterListener (id, this);
     if (publishId.load() >= 0) LinkHub::getInstance().unregisterSource (publishId.load());
@@ -874,6 +877,37 @@ void ThrumaProcessor::rebuildKit (bool userChange)
     missingFiles.clear();
     kitPublisher.publish (kitManager.buildKit (currentRate, &missingFiles));
     syncMixer (userChange);
+}
+
+void ThrumaProcessor::runKitJob (std::function<void (KitManager&)> job, std::function<void()> onDone)
+{
+    ++pendingKitJobs;
+    const double rate = currentRate;
+    juce::WeakReference<ThrumaProcessor> weak (this);
+    auto* km = &kitManager;
+    kitLoader->addJob ([weak, km, job, onDone, rate]
+    {
+        if (job)
+        {
+            km->beginProgress (KitManager::LoadPhase::Samples, 0);
+            job (*km);
+        }
+        km->beginProgress (KitManager::LoadPhase::Kit, km->countFiles());
+        auto missing = std::make_shared<juce::StringArray>();
+        std::shared_ptr<Kit> kit (km->buildKit (rate, missing.get()).release());
+        km->endProgress();
+        juce::MessageManager::callAsync ([weak, kit, missing, onDone, rate]
+        {
+            auto* self = weak.get();
+            if (self == nullptr) return;
+            if (std::abs (rate - self->currentRate) < 0.5) self->kitPublisher.publish (std::make_unique<Kit> (*kit));
+            else self->rebuildKit (false);   // the sample rate changed meanwhile
+            self->missingFiles = *missing;
+            self->syncMixer (true);
+            --self->pendingKitJobs;
+            if (onDone) onDone();
+        });
+    });
 }
 
 void ThrumaProcessor::markStateChanged()

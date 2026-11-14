@@ -147,6 +147,7 @@ void TransientDetector::updateDerived() noexcept
 
     refDecayPerSample = (float) (0.05 / sr);  // adaptive reference falls very slowly (breaks must not lower it)
     smoothCoeff = onePoleCoeff (0.010 * sr);
+    establishAfter = (int64_t) (1.5 * sr);
 }
 
 float TransientDetector::thresholdNow() const noexcept
@@ -177,7 +178,10 @@ void TransientDetector::reset (int64_t startPosition) noexcept
     pos = startPosition;
     bodyFloorDb = atkFloorDb = -120.0f;
     if (! refFixed) refDb = -12.0f;
-    atkRefDb = -12.0f;
+    atkRefDb = -12.0f;    // until the first confident hit sets it
+    atkRefSet = false;
+    recentCount = 0;
+    firstHitPos = -1;
     if (! templateFixed) tmpl = {};
     state = State::Idle;
     lastOnset = startPosition - 1000000000LL;
@@ -239,7 +243,7 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
 
     if (! refFixed)
         refDb = std::max (-60.0f, refDb - refDecayPerSample);
-    atkRefDb = std::max (-70.0f, atkRefDb - 20.0f * refDecayPerSample);   // 1 dB/s: tracks the current playing intensity
+    atkRefDb = std::max (-100.0f, atkRefDb - 20.0f * refDecayPerSample);   // 1 dB/s: tracks the current playing intensity
 
     // smoothed level: robust against momentary dips (beating modes, noisy wires) for re-arming
     bodySmoothDb = bodyDb + (bodySmoothDb - bodyDb) * smoothCoeff;
@@ -310,6 +314,14 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
 
         if (pos - candStart >= velWindow)
         {
+            // No confident hit yet, 1.5 s after the first one: the track is simply quieter than the starting
+            // reference assumes. Adopt the levels actually heard (a real drum after early bleed comes much sooner).
+            if (! atkRefSet && firstHitPos >= 0 && pos - firstHitPos > establishAfter)
+            {
+                atkRefDb = maxAtkSoFar;
+                atkRefSet = true;
+                if (! refFixed && maxPeakSoFar < refDb - 6.0f) refDb = maxPeakSoFar;
+            }
             const float peakDb = fastDb (candPeakBody);
             const float fullDb = fastDb (candPeakFull);
             const float absThr = thresholdNow();
@@ -323,8 +335,11 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             const bool bodyRiseOk = rearmed ? (peakDb - candLevelBeforeDb) >= mainRiseMinDb
                                             : (peakDb - candLevelBeforeDb) >= std::max (3.0f, mainRiseMinDb)
                                                   && atkLikeHit && atkRise >= 0.5f * riseThrDb;
+            // a very strong fresh attack (20+ dB out of the previous hit's tail) is a new hit even when the body
+            // hardly rises, e.g. a compressor before Thruma flattened the body and holds up the tail
+            const float atkRefMargin = atkRise >= riseThrDb + 14.0f ? 12.0f : 6.0f;
             const bool riseOk = bodyRiseOk
-                             || (atkRise >= 0.6f * riseThrDb && peakDb >= lastHitPeakDb - 10.0f && atkPeakDb >= atkRefDb - 6.0f
+                             || (atkRise >= 0.6f * riseThrDb && peakDb >= lastHitPeakDb - 10.0f && atkPeakDb >= atkRefDb - atkRefMargin
                                  && atkPeakDb >= lastHitAtkDb - 8.0f);
             const bool focusOk = ! settings.frequencyFocus || (peakDb - fullDb) >= focusMinDb;
 
@@ -397,9 +412,24 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                     // for minutes) and a slow step down when the playing gets quieter
                     if (peakDb > refDb) refDb += std::min (1.5f, 0.5f * (peakDb - refDb));
                     else if (peakDb > refDb - 12.0f) refDb -= 0.03f * (refDb - peakDb);
+                    // When even the loudest of the last hits is well below the reference, the reference is wrong
+                    // (a quieter track, or a plugin before Thruma turned it down): follow the real level within
+                    // a few hits instead of minutes. Ghost notes alone never do this, the backbeat keeps it up.
+                    recentPeaks[(size_t) (recentCount++ % kRecent)] = peakDb;
+                    if (recentCount >= kRecent)
+                    {
+                        const float loudest = *std::max_element (recentPeaks.begin(), recentPeaks.end());
+                        if (loudest < refDb - 3.0f) refDb = std::max (loudest, refDb - 6.0f);
+                    }
                 }
-                if (atkPeakDb > atkRefDb)
-                    atkRefDb += 0.5f * (atkPeakDb - atkRefDb);
+                // attack level of real hits, used while a drum keeps ringing (fast double bass never decays enough
+                // to re-arm). Taken from the first confident hit, so it does not depend on the track's absolute level.
+                if (firstHitPos < 0) { firstHitPos = onset; maxAtkSoFar = atkPeakDb; maxPeakSoFar = peakDb; }
+                maxAtkSoFar = std::max (maxAtkSoFar, atkPeakDb);
+                maxPeakSoFar = std::max (maxPeakSoFar, peakDb);
+                const bool confidentHit = peakDb >= refDb - 6.0f;
+                if (! atkRefSet && confidentHit) { atkRefDb = atkPeakDb; atkRefSet = true; }
+                else if (atkPeakDb > atkRefDb) atkRefDb += 0.5f * (atkPeakDb - atkRefDb);
                 lastHitAtkDb = atkPeakDb;
 
                 // learn the fingerprint from confident hits; restart if the reference jumped (louder source found)
@@ -420,6 +450,12 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             }
             else
             {
+                // A clear, drum-like hit that failed only because it is quieter than the reference: the reference
+                // is too high (a quieter track, or a plugin before Thruma turned the level down). Pull it down
+                // quickly while such hits keep coming, instead of waiting minutes for the slow decay.
+                if (! refFixed && ! levelOk && riseOk && focusOk && shapeOk
+                    && peakDb >= bodyFloorDb + floorMarginDb + 6.0f && peakDb >= -90.0f)
+                    refDb = std::max (peakDb, refDb - std::min (6.0f, 0.5f * (absThr - peakDb) + 1.5f));
                 cooldownUntil = pos + velWindow / 2;
                 if (levelOk) rejectedPos = candStart;   // loud enough but not drum-like: show it on the scope
             }

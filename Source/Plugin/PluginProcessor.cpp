@@ -455,8 +455,9 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     float inPk = 0.0f;
     for (int c = 0; c < juce::jmin (buffer.getNumChannels(), juce::jmin (2, effectiveIn)); ++c)
         inPk = std::max (inPk, buffer.getMagnitude (c, 0, total));
-    if (inPk > 1.0e-4f) lastSignalBlockTime = internalTimeline;
-    const bool signalPresent = internalTimeline - lastSignalBlockTime < (int64_t) (2.0 * currentRate);
+    if (inPk > 1.0e-2f) lastLoudBlockTime = internalTimeline;
+    // drum-level audio (not hiss or a quiet tail from a plugin before Thruma while the DAW is stopped)
+    const bool loudSignalPresent = internalTimeline - lastLoudBlockTime < (int64_t) (2.0 * currentRate);
 
     hostBridge.noteCurrentTrack();
 
@@ -468,14 +469,16 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     int newMode = 0;
     if (hostPlaying || advancing) { newMode = 1; hostTimelineSeen = true; }   // follow the host transport
-    else if (! hostTimelineSeen && signalPresent) newMode = 2;              // host gives no moving position: own clock
-    if (newMode == 1 && lastActiveMode == 2)
+    else if (! hostTimelineSeen && loudSignalPresent) newMode = 2;         // host gives no moving position: own clock
+    if (newMode == 1 && lastActiveMode == 2 && ownClockRecorded.load (std::memory_order_relaxed))
     {
-        // the host started reporting its transport: restart the history on the host timeline
+        // the host started reporting its transport: restart the history Thruma recorded on its own clock on the
+        // host timeline. (Only that: imported / analysed audio and history from the DAW's timeline stay.)
         capture.origin.store (-1);
         capture.length.store (0);
         logExpectedNext = -1;
     }
+    if (newMode == 1) ownClockRecorded.store (false, std::memory_order_relaxed);
     if (newMode != 0) lastActiveMode = newMode;
 
     bool playing = newMode != 0;
@@ -653,9 +656,15 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
         ref = ok ? refBuf.data() : nullptr;
     }
 
-    const bool recordHistory = playing && capture.capacity > 0 && rs.source == TriggerSource::Live;
+    // Thruma's own clock (a host without a moving position, or a stopped DAW while audio comes in, e.g. noise or a
+    // tail from a plugin before Thruma) only records into an empty history or one it started itself: it never
+    // writes over imported / analysed audio or what was recorded while the DAW played.
+    const bool ownClock = transportMode.load (std::memory_order_relaxed) == 2;
+    const bool ownClockMayRecord = capture.origin.load (std::memory_order_relaxed) < 0 || ownClockRecorded.load (std::memory_order_relaxed);
+    const bool recordHistory = playing && capture.capacity > 0 && rs.source == TriggerSource::Live && (! ownClock || ownClockMayRecord);
     if (recordHistory)
     {
+        if (ownClock) ownClockRecorded.store (true, std::memory_order_relaxed);
         auto origin = capture.origin.load (std::memory_order_relaxed);
         if (origin < 0)
         {
@@ -1027,6 +1036,7 @@ void ThrumaProcessor::allocateCapture()
 void ThrumaProcessor::clearCapture()
 {
     suspendProcessing (true);
+    ownClockRecorded.store (false);
     capture.origin.store (-1);
     capture.length.store (0);
     for (auto& d : capture.data) std::fill (d.begin(), d.end(), 0.0f);
@@ -1322,6 +1332,7 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
                 if (origin != cap.origin.load())
                     std::fill (self->beatMap.begin(), self->beatMap.end(), std::numeric_limits<double>::quiet_NaN());
                 std::copy (audio->begin(), audio->end(), cap.data[0].begin());
+                self->ownClockRecorded.store (false);
                 cap.origin.store (origin);
                 cap.firstIndex.store (0);
                 cap.length.store (len);

@@ -147,7 +147,13 @@ private:
     float candPeakAtk = 0, candAtkBeforeDb = -150;
     int64_t candPeakPosIdx = 0;
     float lastHitPeakDb = -150;
-    float atkRefDb = -12.0f;      // adaptive level of the attack band at real hits
+    float atkRefDb = -12.0f;
+    bool atkRefSet = false;
+    static constexpr int kRecent = 12;
+    std::array<float, kRecent> recentPeaks {};
+    int recentCount = 0;
+    int64_t firstHitPos = -1, establishAfter = 72000;
+    float maxAtkSoFar = -150.0f, maxPeakSoFar = -150.0f;     // adaptive level of the attack band at real hits
     float bodySmoothDb = -180.0f, smoothCoeff = 0.99f;
     float lastBodyDb = -180.0f;
     int64_t rejectedPos = -1;

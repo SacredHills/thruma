@@ -290,9 +290,10 @@ private:
     std::atomic<int64_t> playhead { 0 };
     std::atomic<bool> transportPlaying { false };
     std::atomic<int> transportMode { 0 };
-    int64_t lastHostTime = std::numeric_limits<int64_t>::min(), lastSignalBlockTime = -1000000000LL;
+    int64_t lastHostTime = std::numeric_limits<int64_t>::min(), lastLoudBlockTime = -1000000000LL;
     int lastHostBlock = 0, lastActiveMode = 0;
     bool blockPlaying = false, hostTimelineSeen = false;
+    std::atomic<bool> ownClockRecorded { false };   // the history was recorded on Thruma's own clock
     int uiTab = 1;   // REPLACE
     std::unique_ptr<juce::ThreadPool> workers;
     std::unique_ptr<juce::ThreadPool> kitLoader;   // one job at a time

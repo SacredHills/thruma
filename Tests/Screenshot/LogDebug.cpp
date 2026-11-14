@@ -189,6 +189,40 @@ int main()
         check (fakePlaying == 1, "Play starts the host transport");
     }
 
+    // ---- 3b) noise from a plugin before Thruma while the DAW is stopped must not wipe the waveform ----
+    {
+        auto wavB = writeWav ("thruma_noise_test.wav", [] (int i) { return (i % 24000) < 400 ? 0.8f * std::sin ((float) i * 0.3f) * std::exp (-(float) (i % 24000) / 120.0f) : 0.0f; }, 48000 * 6, 48000.0);
+        std::unique_ptr<ThrumaProcessor> pn (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH phn; phn.playing = false; phn.pos = 48000; pn->setPlayHead (&phn); pn->prepareToPlay (48000.0, 512);
+        juce::String result;
+        pn->importAudio (wavB, [&] (const juce::String& m) { result = m; });
+        for (int i = 0; i < 100 && result.isEmpty(); ++i) pump (50);
+        const auto len0 = pn->getCapture().length.load();
+        const auto org0 = pn->getCapture().origin.load();
+        std::vector<float> before (pn->getCapture().data[0].begin(), pn->getCapture().data[0].begin() + len0);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        juce::Random rnd (3);
+        auto feed = [&] (int blocks, bool play)
+        {
+            phn.playing = play;
+            for (int b = 0; b < blocks; ++b)
+            {
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < 512; ++i) buf.setSample (c, i, 0.002f * (rnd.nextFloat() * 2 - 1));   // -54 dB hiss
+                midi.clear(); pn->processBlock (buf, midi);
+                if (play) phn.pos += 512;
+            }
+        };
+        feed (300, false);   // ~3 s stopped, with a noisy plugin before Thruma
+        bool same = pn->getCapture().length.load() == len0 && pn->getCapture().origin.load() == org0;
+        for (int64_t i = 0; same && i < len0; i += 7) same = pn->getCapture().data[0][(size_t) i] == before[(size_t) i];
+        check (len0 > 48000 * 5 && same && pn->getTransportMode() == 0, "stopped DAW + noise from a plugin before Thruma: imported waveform untouched");
+        phn.pos = 0;
+        feed (200, true);    // then the DAW plays
+        same = pn->getCapture().length.load() >= len0 && pn->getCapture().origin.load() == org0;
+        for (int64_t i = 0; same && i < len0; i += 7) same = pn->getCapture().data[0][(size_t) i] == before[(size_t) i];
+        check (same, "...and pressing play in the DAW keeps it");
+    }
+
     // ---- 4) instrument with the main input switched off (Studio One): both channels, sidechain as the drum ----
     {
         std::unique_ptr<ThrumaProcessor> p3 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));

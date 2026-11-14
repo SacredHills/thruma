@@ -87,6 +87,8 @@ Thruma also learns in the background while the song plays: the level of your rea
 
 **Fast playing** (rolls, blast beats, fast double bass): detection follows hits down to about 40 ms apart (16ths at 180+ BPM). Very fast snare rolls under ~40 ms may lose some notes; check the MIDI lane and add any missing ones.
 
+**Track level and plugins before Thruma:** detection follows the track's own level, so quiet tracks, gain plugins, EQ and compressors before Thruma are fine. Live tracking settles on a new level within the first second or two of hits (and re-learns from what it hears every few seconds); **Analyze** reads the whole track and gets every hit from the start. Very heavy compression or clipping before Thruma flattens the hits and lifts the bleed, so put those *after* Thruma when you can. Stereo wideners or Haas-style delays before Thruma blur the transients (Thruma listens to left + right), so keep the track mono going into it.
+
 **Latency:** replacement uses a short look-ahead so each sample starts exactly on the hit: 8 ms for kick and toms, 6 ms for snare, 4.5–5.5 ms for hats and cymbals (set the *Lookahead* parameter in your DAW's plugin parameter list to *Lowest* for 3 ms, slightly less accurate on kicks). Your DAW compensates it. Turning on DEBLEED adds about 21 ms.
 
 ---

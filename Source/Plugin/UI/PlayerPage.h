@@ -25,6 +25,8 @@ public:
     void fileDragExit (const juce::StringArray&) override { dropSlot = -1; repaint(); }
     void filesDropped (const juce::StringArray& files, int x, int y) override;
     juce::String getTooltip() override;
+    /** The right-click menu of a drum / pad (public for tests). */
+    juce::PopupMenu buildMenu (int slot, std::vector<juce::File>& fileIds);
 
     /** Editor hooks: open a slot on the SAMPLES page; the kit changed (refresh other pages). */
     std::function<void (int slot)> onEditSlot;
@@ -43,6 +45,7 @@ private:
     int padsHeight() const;
     int slotAt (juce::Point<float> p) const;
     void showMenu (int slot);
+    void showBuiltMenu (juce::PopupMenu& menu, int slot, std::vector<juce::File> fileIds);
     void chooseFiles (int slot, bool add, bool folder);
     void assign (int slot, const juce::Array<juce::File>& files, bool add);
     void setMidiNote (int slot, int note);

@@ -351,6 +351,13 @@ void PlayerPage::mouseDown (const juce::MouseEvent& e)
 
 void PlayerPage::showMenu (int slot)
 {
+    std::vector<juce::File> fileIds;
+    auto menu = buildMenu (slot, fileIds);
+    showBuiltMenu (menu, slot, fileIds);
+}
+
+juce::PopupMenu PlayerPage::buildMenu (int slot, std::vector<juce::File>& fileIds)
+{
     auto& km = proc.getKitManager();
     const auto m = km.getSlot (slot);
     juce::PopupMenu menu;
@@ -364,7 +371,8 @@ void PlayerPage::showMenu (int slot)
         juce::PopupMenu notes;
         for (int n = 27; n <= 87; ++n)
         {
-            juce::String label = juce::MidiMessage::getMidiNoteName (n, true, true, 3) + "  (" + juce::String (n) + ")  " + juce::MidiMessage::getRhythmInstrumentName (n);
+            juce::String label = juce::MidiMessage::getMidiNoteName (n, true, true, 3) + "  (" + juce::String (n) + ")";
+            if (const char* gm = juce::MidiMessage::getRhythmInstrumentName (n)) label << "  " << gm;   // only 35 - 81 have names (else nullptr)
             for (int other = 0; other < kNumKitSlots; ++other)
                 if (other != slot && km.getSlot (other).midiNote == n && (other < kNumInstruments || ! km.getSlot (other).isEmpty()))
                     label << "  - now " << km.getSlotName (other);
@@ -381,7 +389,7 @@ void PlayerPage::showMenu (int slot)
     else menu.addItem (7, "Clear samples", ! m.isEmpty());
     juce::PopupMenu files;
     int id = 100;
-    std::vector<juce::File> fileIds;
+    fileIds.clear();
     for (auto& l : m.layers)
         for (auto& f : l.files) { files.addItem (id++, f.getFileNameWithoutExtension()); fileIds.push_back (f); }
     if (! fileIds.empty())
@@ -390,6 +398,11 @@ void PlayerPage::showMenu (int slot)
         menu.addSubMenu ("Samples (" + juce::String ((int) fileIds.size()) + ") - click to hear", files);
     }
 
+    return menu;
+}
+
+void PlayerPage::showBuiltMenu (juce::PopupMenu& menu, int slot, std::vector<juce::File> fileIds)
+{
     juce::Component::SafePointer<PlayerPage> safe (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
                         [safe, slot, fileIds] (int r)

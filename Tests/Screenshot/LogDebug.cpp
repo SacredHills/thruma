@@ -3,6 +3,7 @@
 #include "../../Source/Plugin/PluginProcessor.h"
 #include "../../Source/Plugin/UI/TrackerLane.h"
 #include "../../Source/Plugin/UI/SamplesPage.h"
+#include "../../Source/Plugin/UI/PlayerPage.h"
 #include <random>
 #include <set>
 using namespace thruma;
@@ -455,6 +456,25 @@ int main()
             };
             scan (sp);
             check (chipsSeen == 9 && outside == 0, "SAMPLES: all 9 hi-hat samples visible inside their rows (" + juce::String (chipsSeen) + " seen, " + juce::String (outside) + " cut off)");
+        }
+        // PLAYER: the right-click menu builds for every drum and pad, whatever their MIDI notes
+        {
+            std::function<ui::PlayerPage* (juce::Component*)> findPlayer = [&] (juce::Component* c) -> ui::PlayerPage*
+            {
+                if (auto* pp = dynamic_cast<ui::PlayerPage*> (c)) return pp;
+                for (auto* ch : c->getChildren()) if (auto* pp = findPlayer (ch)) return pp;
+                return nullptr;
+            };
+            auto* pp = findPlayer (ed.get());
+            int built = 0;
+            for (int note : { 0, 27, 36, 87, 127 })
+                for (int slot = 0; slot < kNumInstruments + 3; ++slot)
+                {
+                    auto m = p8->getKitManager().getSlot (slot); m.midiNote = note; p8->getKitManager().setSlot (slot, m);
+                    std::vector<juce::File> ids;
+                    if (pp->buildMenu (slot, ids).getNumItems() > 5) ++built;
+                }
+            check (built == 5 * (kNumInstruments + 3), "PLAYER right-click menu builds for every drum and pad (" + juce::String (built) + ")");
         }
         ed.reset();
     }

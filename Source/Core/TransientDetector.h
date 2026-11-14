@@ -174,6 +174,8 @@ private:
     std::array<float, kRecent> recentPeaks {};
     int recentCount = 0;
     int64_t firstHitPos = -1, establishAfter = 72000;
+    int64_t lastConfidentPos = -1, staleAfter = 384000;   // last hit at the reference level
+    bool referenceStale() const noexcept { return lastConfidentPos < 0 || pos - lastConfidentPos > staleAfter; }
     float maxAtkSoFar = -150.0f, maxPeakSoFar = -150.0f;     // adaptive level of the attack band at real hits
     float bodySmoothDb = -180.0f, smoothCoeff = 0.99f;
     float lastBodyDb = -180.0f;

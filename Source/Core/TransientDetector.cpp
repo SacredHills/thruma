@@ -178,6 +178,7 @@ void TransientDetector::updateDerived() noexcept
     refDecayPerSample = (float) (0.05 / sr);  // adaptive reference falls very slowly (breaks must not lower it)
     smoothCoeff = onePoleCoeff (0.010 * sr);
     establishAfter = (int64_t) (1.5 * sr);
+    staleAfter = (int64_t) (8.0 * sr);
 }
 
 float TransientDetector::thresholdNow() const noexcept
@@ -212,6 +213,7 @@ void TransientDetector::reset (int64_t startPosition) noexcept
     atkRefSet = false;
     recentCount = 0;
     firstHitPos = -1;
+    lastConfidentPos = -1;
     if (! templateFixed) tmpl = {};
     state = State::Idle;
     lastOnset = startPosition - 1000000000LL;
@@ -410,11 +412,11 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                 // candidates accepted under the looser fast-playing rules must sound even more like the drum
                 const float fastPenalty = (! rearmed && (candStart - lastOnset) < fastWindow) ? 0.75f : 1.0f;
                 shapeOk = dist <= specThrDb * (1.0f - 0.45f * depth) * fastPenalty;
-                // Far louder than anything bleed-like on this track: it cannot be bleed. Softer hits of the drum
+                // Clearly louder than the loud bleed on this track: it cannot be bleed. Softer hits of the drum
                 // sound darker than the loud ones the fingerprint was learned from, so compare without the overall
                 // tilt and without the quieter-must-match-closer penalty.
                 soundsLikeDrum = shapeDistanceNoTilt (shape, tmpl) <= specThrDb * fastPenalty;
-                if (! shapeOk && bleedKnown() && peakDb - refDb >= bleedRelDb + 10.0f)
+                if (! shapeOk && bleedKnown() && peakDb - refDb >= bleedRelDb + 5.0f)
                     shapeOk = soundsLikeDrum;
             }
 
@@ -454,17 +456,21 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                 lastHitShape = shape;
                 lastHitShapeValid = true;
 
+                if (peakDb >= refDb - 10.0f) lastConfidentPos = onset;   // a hit near (or above) the reference level
                 if (! refFixed)
                 {
                     // robust running reference: limited step up (a single freak peak cannot raise the threshold
                     // for minutes) and a slow step down when the playing gets quieter
-                    if (peakDb > refDb) refDb += std::min (1.5f, 0.5f * (peakDb - refDb));
+                    // ...except a hit far louder than the reference: the reference was sitting at bleed level
+                    // (a tom mic before the first real tom hit), so catch up at once
+                    if (peakDb > refDb + 10.0f) refDb += 0.75f * (peakDb - refDb);
+                    else if (peakDb > refDb) refDb += std::min (3.0f, 0.5f * (peakDb - refDb));
                     else if (peakDb > refDb - 12.0f) refDb -= 0.03f * (refDb - peakDb);
                     // When even the loudest of the last hits is well below the reference, the reference is wrong
                     // (a quieter track, or a plugin before Thruma turned it down): follow the real level within
                     // a few hits instead of minutes. Ghost notes alone never do this, the backbeat keeps it up.
                     recentPeaks[(size_t) (recentCount++ % kRecent)] = peakDb;
-                    if (recentCount >= kRecent)
+                    if (recentCount >= kRecent && referenceStale())
                     {
                         const float loudest = *std::max_element (recentPeaks.begin(), recentPeaks.end());
                         if (loudest < refDb - 3.0f) refDb = std::max (loudest, refDb - 6.0f);
@@ -501,23 +507,26 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                 // A clear, drum-like hit that failed only because it is quieter than the reference: the reference
                 // is too high (a quieter track, or a plugin before Thruma turned the level down). Pull it down
                 // quickly while such hits keep coming, instead of waiting minutes for the slow decay.
-                if (! refFixed && ! levelOk && riseOk && focusOk && shapeOk
+                // (only while no hit at the reference level has come for a while: on a tom mic the toms are sparse
+                // and the bleed in between must not drag the reference down to its own level)
+                if (! refFixed && ! levelOk && riseOk && focusOk && shapeOk && referenceStale()
                     && peakDb >= bodyFloorDb + floorMarginDb + 6.0f && peakDb >= -90.0f)
                     refDb = std::max (peakDb, refDb - std::min (6.0f, 0.5f * (absThr - peakDb) + 1.5f));
                 cooldownUntil = pos + velWindow / 2;
                 // how loud bleed-like events are on this track (relative to the hits): everything that started like
                 // a hit but was not one. A slow average, robust to the odd rejected real hit.
                 // Only candidates that start once the drum has decayed (its own ring between fast hits is not bleed);
-                // the median of them, so the odd rejected real hit does not move it.
+                // a high quantile of them (the loud bleed is what matters), robust to the odd rejected real hit.
                 // (a rejected candidate that does sound like a softer hit of the drum is not counted as bleed)
                 if (! bleedFixed && rearmed && peakDb > bodyFloorDb + 3.0f && ! (focusOk && soundsLikeDrum && levelOk))
                 {
                     const int bin = std::clamp ((int) std::floor (refDb - peakDb), 0, kBleedBins - 1);
                     ++bleedHist[(size_t) bin];
                     if (++bleedCount > 600) { bleedCount = 0; for (auto& h : bleedHist) { h /= 2; bleedCount += h; } }   // slowly forget
-                    int acc = 0, median = 0;
-                    for (int b = 0; b < kBleedBins; ++b) { acc += bleedHist[(size_t) b]; if (acc * 2 >= bleedCount) { median = b; break; } }
-                    bleedRelDb = -((float) median + 0.5f);
+                    // the level the loudest quarter of them reaches (bins run from loud to quiet)
+                    int acc = 0, q = 0;
+                    for (int b = 0; b < kBleedBins; ++b) { acc += bleedHist[(size_t) b]; if (acc * 4 >= bleedCount) { q = b; break; } }
+                    bleedRelDb = -((float) q + 0.5f);
                 }
                 // near misses become dim trigger points (with the reason), so they can be checked and added
                 if (peakDb >= absThr - 18.0f && peakDb >= bodyFloorDb + floorMarginDb * 0.5f)

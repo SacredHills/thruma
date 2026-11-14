@@ -51,7 +51,7 @@ target_compile_definitions(Thruma PUBLIC
     JUCE_USE_OGGVORBIS=0
     JUCE_USE_MP3AUDIOFORMAT=0)
 
-juce_add_binary_data(ThrumaAssets SOURCES "${PROJECT_SOURCE_DIR}/Assets/kit.jpg" "${PROJECT_SOURCE_DIR}/Assets/logo.png")
+juce_add_binary_data(ThrumaAssets SOURCES "${PROJECT_SOURCE_DIR}/Assets/room.jpg" "${PROJECT_SOURCE_DIR}/Assets/drums.png" "${PROJECT_SOURCE_DIR}/Assets/logo.png")
 set_target_properties(ThrumaAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_link_libraries(Thruma

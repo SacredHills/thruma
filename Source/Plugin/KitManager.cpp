@@ -183,7 +183,11 @@ void KitManager::autoDistributeVelocities (int inst)
 void KitManager::clearSlot (int inst)
 {
     std::lock_guard<std::recursive_mutex> l (mutex);
-    slots[(size_t) inst].layers.clear();
+    if (inst < 0 || inst >= kNumKitSlots) return;
+    if (! isPadSlot (inst)) { slots[(size_t) inst].layers.clear(); return; }
+    for (int i = inst; i + 1 < kNumKitSlots; ++i) slots[(size_t) i] = slots[(size_t) (i + 1)];
+    slots[(size_t) (kNumKitSlots - 1)] = {};
+    slots[(size_t) (kNumKitSlots - 1)].midiNote = -1;
 }
 
 void KitManager::clearAll()

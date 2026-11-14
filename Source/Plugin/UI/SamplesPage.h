@@ -20,11 +20,14 @@ public:
     void fileDragEnter (const juce::StringArray&, int, int) override { dragOver = true; repaint(); }
     void fileDragExit (const juce::StringArray&) override { dragOver = false; repaint(); }
     void paintOverChildren (juce::Graphics&) override;
+    /** Height this row needs at a given width (all its sample chips visible). */
+    int heightForWidth (int width) const;
     /** Light up the chip of the sample that just played (by SampleData::pathHash). */
     void flash (uint64_t sampleHash, float velocity);
     bool decay();   // true while still lit
 
 private:
+    int layoutChips (juce::Rectangle<int> area, bool apply) const;   // returns the bottom of the last line
     std::vector<uint64_t> hashes;   // per chip
     int flashIdx = -1;
     float flashLevel = 0.0f, flashVel = 0.0f;

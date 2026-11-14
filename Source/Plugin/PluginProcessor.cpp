@@ -233,8 +233,10 @@ void ThrumaProcessor::timerCallback()
     midiSeqPublisher.collectGarbage();
     if (previewPlaying.load()) hostBridge.keepAwake();   // hosts that pause idle tracks: keep this one running
 
+    if (pendingRestore != OfflineSource::None && prepared && ! analysing.load()) restoreOfflineAudio();
+
     // offline analysis: un-finalizing goes back to live detection; changed detection settings re-analyse
-    if (offlineSource != OfflineSource::None && ! isFinalized() && ! analysing.load())
+    if (offlineSource != OfflineSource::None && ! isFinalized() && ! analysing.load() && pendingRestore == OfflineSource::None)
         dropOfflineAudio();
     if (offlineSource != OfflineSource::None && ! analysing.load() && detectionSettingsKey() != analysedKey)
     {
@@ -907,6 +909,16 @@ void ThrumaProcessor::allocateCapture()
 
     if (rateChanged)
     {
+        // imported / analysed audio was converted for the old rate: load it again for the new one
+        if (offlineSource == OfflineSource::File && offlinePath.isNotEmpty()) pendingRestore = OfflineSource::File;
+        else if (offlineSource == OfflineSource::HostTrack) pendingRestore = OfflineSource::HostTrack;
+        if (offlineSource != OfflineSource::None)
+        {
+            offlineAudio.reset();
+            offlineSource = OfflineSource::None;
+            previewMode.store (false);
+            previewPlaying.store (false);
+        }
         capture.origin.store (-1);
         capture.length.store (0);
         for (auto& d : capture.data) { d.clear(); d.shrink_to_fit(); }
@@ -1054,12 +1066,10 @@ void ThrumaProcessor::setFinalized (bool f)
         src->setValueNotifyingHost (src->convertTo0to1 ((float) (f ? TriggerSource::Edited : TriggerSource::Live)));
 }
 
-void ThrumaProcessor::importAudio (const juce::File& file, std::function<void (const juce::String&)> onDone)
+std::shared_ptr<const std::vector<float>> ThrumaProcessor::readAudioFile (const juce::File& file, juce::String& error)
 {
     std::unique_ptr<juce::AudioFormatReader> reader (kitManager.getFormatManager().createReaderFor (file));
-    if (reader == nullptr) { if (onDone) onDone ("Could not read " + file.getFileName()); return; }
-    if (analysing.load()) { if (onDone) onDone ("Busy - try again in a moment."); return; }
-
+    if (reader == nullptr) { error = "Could not read " + file.getFileName(); return nullptr; }
     const double fileRate = reader->sampleRate;
     const auto maxLen = (int64_t) (fileRate * 600.0);   // up to 10 minutes
     const int len = (int) std::min<juce::int64> (reader->lengthInSamples, maxLen);
@@ -1072,9 +1082,43 @@ void ThrumaProcessor::importAudio (const juce::File& file, std::function<void (c
         for (int c = 0; c < buf.getNumChannels(); ++c) v += buf.getSample (c, i);
         mono[(size_t) i] = v / (float) buf.getNumChannels();
     }
-    auto audio = std::make_shared<const std::vector<float>> (std::abs (fileRate - currentRate) > 0.5 ? resampleHighQuality (mono, fileRate, currentRate)
-                                                                                                    : std::move (mono));
+    return std::make_shared<const std::vector<float>> (std::abs (fileRate - currentRate) > 0.5 ? resampleHighQuality (mono, fileRate, currentRate)
+                                                                                            : std::move (mono));
+}
+
+void ThrumaProcessor::importAudio (const juce::File& file, std::function<void (const juce::String&)> onDone)
+{
+    if (analysing.load()) { if (onDone) onDone ("Busy - try again in a moment."); return; }
+    juce::String error;
+    auto audio = readAudioFile (file, error);
+    if (audio == nullptr) { if (onDone) onDone (error); return; }
     installOfflineAudio (audio, 0, file.getFileName(), OfflineSource::File, std::move (onDone));
+    offlinePath = file.getFullPathName();
+}
+
+void ThrumaProcessor::restoreOfflineAudio()
+{
+    // a reopened project: bring back the imported audio (or the RAVENYR track) with its waveform; keep the saved notes
+    const auto what = pendingRestore;
+    if (what == OfflineSource::File)
+    {
+        pendingRestore = OfflineSource::None;
+        const juce::File f (offlinePath);
+        if (! f.existsAsFile()) { offlineMessage = "The imported file " + f.getFileName() + " was moved or deleted."; ++offlineMessageCount; return; }
+        juce::String error;
+        if (auto audio = readAudioFile (f, error))
+            installOfflineAudio (audio, 0, f.getFileName(), OfflineSource::File, {}, true);
+    }
+    else if (what == OfflineSource::HostTrack && canReadHostTrack())
+    {
+        pendingRestore = OfflineSource::None;
+        const double hostRate = hostBridge.hostSampleRate() > 0.0 ? hostBridge.hostSampleRate() : currentRate;
+        auto mono = hostBridge.readWholeTrack ((int64_t) (hostRate * 600.0));
+        if (mono.empty()) return;
+        auto audio = std::make_shared<const std::vector<float>> (std::abs (hostRate - currentRate) > 0.5 ? resampleHighQuality (mono, hostRate, currentRate)
+                                                                                                        : std::move (mono));
+        installOfflineAudio (audio, 0, trackName.isNotEmpty() ? trackName : juce::String ("the track"), OfflineSource::HostTrack, {}, true);
+    }
 }
 
 void ThrumaProcessor::analyseTrack (std::function<void (const juce::String&)> onDone)
@@ -1103,8 +1147,9 @@ void ThrumaProcessor::analyseTrack (std::function<void (const juce::String&)> on
 }
 
 void ThrumaProcessor::installOfflineAudio (std::shared_ptr<const std::vector<float>> audio, int64_t origin, const juce::String& name,
-                                           OfflineSource src, std::function<void (const juce::String&)> onDone)
+                                           OfflineSource src, std::function<void (const juce::String&)> onDone, bool restoreOnly)
 {
+    if (src != OfflineSource::File) offlinePath = {};
     previewPlaying.store (false);
     offlineAudio = std::move (audio);
     offlineOrigin = origin;
@@ -1114,11 +1159,13 @@ void ThrumaProcessor::installOfflineAudio (std::shared_ptr<const std::vector<flo
     offlineName = name;
     analysedKey = {};
     reanalyseAt = 0.0;
-    runOfflineAnalysis (true, std::move (onDone));
+    runOfflineAnalysis (true, std::move (onDone), restoreOnly);
 }
 
 void ThrumaProcessor::dropOfflineAudio()
 {
+    offlinePath = {};
+    pendingRestore = OfflineSource::None;
     previewPlaying.store (false);
     previewMode.store (false);
     offlineAudio.reset();
@@ -1136,7 +1183,7 @@ juce::String ThrumaProcessor::detectionSettingsKey() const
     return k;
 }
 
-void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (const juce::String&)> onDone)
+void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (const juce::String&)> onDone, bool restoreOnly)
 {
     if (offlineAudio == nullptr) return;
     if (analysing.exchange (true)) { if (initial && onDone) onDone ("Busy - try again in a moment."); return; }
@@ -1150,7 +1197,7 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
     const auto name = offlineName;
     juce::WeakReference<ThrumaProcessor> weak (this);
 
-    workers->addJob ([weak, audio, origin, sr, rs, key, name, initial, onDone]
+    workers->addJob ([weak, audio, origin, sr, rs, key, name, initial, onDone, restoreOnly]
     {
         auto level = std::make_shared<std::vector<float>>();
         auto thr = std::make_shared<std::vector<float>>();
@@ -1159,7 +1206,7 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
         auto found = std::make_shared<std::vector<Trigger>> (analyseTake (audio->data(), (int64_t) audio->size(), sr, rs.detector,
                                                                          &refDb, &tmpl, level.get(), thr.get(), kEnvBin));
         for (auto& t : *found) t.position += origin;
-        juce::MessageManager::callAsync ([weak, audio, origin, level, thr, found, key, name, initial, onDone, refDb]
+        juce::MessageManager::callAsync ([weak, audio, origin, level, thr, found, key, name, initial, onDone, refDb, restoreOnly]
         {
             auto* self = weak.get();
             if (self == nullptr) return;
@@ -1197,7 +1244,9 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
             std::copy (thr->begin(), thr->begin() + (long) std::min (thr->size(), self->envThreshold.size()), self->envThreshold.begin());
 
             juce::String msg;
-            if (initial)
+            if (restoreOnly)
+                msg = name + " is back (notes as saved).";
+            else if (initial)
             {
                 self->commitTriggerEdit (*found, "Analyze", false);
                 self->setFinalized (true);   // play back exactly these notes; settings changes re-analyse them
@@ -1390,6 +1439,16 @@ void ThrumaProcessor::getStateInformation (juce::MemoryBlock& destData)
         root.appendChild (ov, nullptr);
     }
 
+    if (offlineSource == OfflineSource::File || offlineSource == OfflineSource::HostTrack
+        || pendingRestore == OfflineSource::File || pendingRestore == OfflineSource::HostTrack)
+    {
+        juce::ValueTree off ("OFFLINE");
+        const bool file = offlineSource == OfflineSource::File || pendingRestore == OfflineSource::File;
+        off.setProperty ("source", file ? "file" : "track", nullptr);
+        if (file) off.setProperty ("path", offlinePath, nullptr);
+        root.appendChild (off, nullptr);
+    }
+
     if (midiFileData.getSize() > 0)
     {
         juce::ValueTree mf ("MIDIFILE");
@@ -1467,6 +1526,15 @@ void ThrumaProcessor::setStateInformation (const void* data, int sizeInBytes)
         storedOverview = base64ToFloats (ov.getProperty ("data").toString());
         storedOverviewOrigin = (juce::int64) ov.getProperty ("origin");
     }
+
+    if (auto off = root.getChildWithName ("OFFLINE"); off.isValid())
+    {
+        const bool file = off.getProperty ("source").toString() == "file";
+        offlinePath = file ? off.getProperty ("path").toString() : juce::String();
+        pendingRestore = file ? OfflineSource::File : OfflineSource::HostTrack;   // done once the audio is set up
+    }
+    else
+        pendingRestore = OfflineSource::None;
 
     if (auto mf = root.getChildWithName ("MIDIFILE"); mf.isValid())
     {

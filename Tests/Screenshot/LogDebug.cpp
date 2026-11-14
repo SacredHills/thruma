@@ -2,6 +2,7 @@
 // in-plugin preview of imported audio, automatic re-analysis.
 #include "../../Source/Plugin/PluginProcessor.h"
 #include "../../Source/Plugin/UI/TrackerLane.h"
+#include "../../Source/Plugin/UI/SamplesPage.h"
 #include <random>
 #include <set>
 using namespace thruma;
@@ -389,6 +390,70 @@ int main()
         ph8.playing = false; buf.clear(); p8->processBlock (buf, midi);
         check (c0 > 0.98, "imported audio, Blend 0 %: the original (correlation " + juce::String (c0, 3) + ")");
         check (c1 < 0.3, "imported audio, Blend 100 %: samples only (correlation " + juce::String (c1, 3) + ")");
+
+        // reopening the project: the imported audio comes back, the saved notes (incl. a hand-added one) stay
+        auto list = p8->getTriggers().getAll();
+        Trigger mine; mine.position = 48000 * 7 + 1234; mine.velocity = 0.6f; mine.id = 4242424;
+        list.push_back (mine);
+        std::sort (list.begin(), list.end(), [] (auto& a, auto& b) { return a.position < b.position; });
+        p8->commitTriggerEdit (list, "add", true);
+        juce::MemoryBlock state;
+        p8->getStateInformation (state);
+        const auto savedNotes = p8->getTriggers().size();
+        const auto savedLen = p8->getCapture().length.load();
+        std::unique_ptr<ThrumaProcessor> re (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        re->setStateInformation (state.getData(), (int) state.getSize());
+        PH phr; phr.playing = false; re->setPlayHead (&phr); re->prepareToPlay (48000.0, 512);
+        for (int i = 0; i < 80 && re->getOfflineSource() == ThrumaProcessor::OfflineSource::None; ++i) pump (50);
+        for (int i = 0; i < 40 && re->isAnalysing(); ++i) pump (50);
+        pump (200);
+        bool hasMine = false;
+        for (auto& t : re->getTriggers().getAll()) if (t.position == mine.position) hasMine = true;
+        check (re->getOfflineSource() == ThrumaProcessor::OfflineSource::File && re->getCapture().length.load() == savedLen,
+               "reopened project: the imported WAV and its waveform are back");
+        check (re->getTriggers().size() == savedNotes && hasMine && re->isFinalized(), "reopened project: the saved notes are unchanged ("
+               + juce::String ((int) re->getTriggers().size()) + " of " + juce::String ((int) savedNotes) + ")");
+
+        // SAMPLES: a drum with many samples - every sample stays inside its layer row
+        {
+            juce::Array<juce::File> many;
+            for (int k = 0; k < 9; ++k)
+            {
+                juce::File f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("HiHat_Closed_Tight_Variation_" + juce::String (k) + ".wav");
+                juce::AudioBuffer<float> b (1, 2000);
+                for (int i = 0; i < 2000; ++i) b.setSample (0, i, 0.5f * std::sin ((float) i * 0.3f) * std::exp (-(float) i / 400.0f));
+                f.deleteFile();
+                juce::WavAudioFormat fmt;
+                std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (f), 48000.0, 1, 24, {}, 0));
+                w->writeFromAudioSampleBuffer (b, 0, 2000);
+                many.add (f);
+            }
+            p8->getKitManager().assignFiles ((int) Instrument::HiHat, many);
+            p8->rebuildKit();
+            std::function<ui::SamplesPage* (juce::Component*)> findPage = [&] (juce::Component* c) -> ui::SamplesPage*
+            {
+                if (auto* sp = dynamic_cast<ui::SamplesPage*> (c)) return sp;
+                for (auto* ch : c->getChildren()) if (auto* sp = findPage (ch)) return sp;
+                return nullptr;
+            };
+            auto* sp = findPage (ed.get());
+            sp->setVisible (true);
+            sp->selectSlot ((int) Instrument::HiHat);
+            int chipsSeen = 0, outside = 0;
+            std::function<void (juce::Component*)> scan = [&] (juce::Component* c)
+            {
+                if (auto* row = dynamic_cast<ui::LayerRow*> (c))
+                    for (auto* ch : row->getChildren())
+                        if (auto* b = dynamic_cast<juce::TextButton*> (ch); b != nullptr && b->getButtonText().startsWith ("HiHat"))
+                        {
+                            ++chipsSeen;
+                            if (! row->getLocalBounds().contains (b->getBounds())) ++outside;
+                        }
+                for (auto* ch : c->getChildren()) scan (ch);
+            };
+            scan (sp);
+            check (chipsSeen == 9 && outside == 0, "SAMPLES: all 9 hi-hat samples visible inside their rows (" + juce::String (chipsSeen) + " seen, " + juce::String (outside) + " cut off)");
+        }
         ed.reset();
     }
 
@@ -423,6 +488,21 @@ int main()
                + km.getSlotName (pad0) + ", " + km.getSlotName (pad1));
         const int note0 = km.getSlot (pad0).midiNote, note1 = km.getSlot (pad1).midiNote;
         check (note0 >= 0 && note1 >= 0 && note0 != note1 && note0 != 38 && note1 != 36, "pads get their own free MIDI notes: " + juce::String (note0) + ", " + juce::String (note1));
+
+        // removing a pad: the next one moves up, nothing is left behind
+        {
+            km.setSlotName (kNumInstruments + 2, "Shaker");
+            km.assignFiles (kNumInstruments + 2, { dir.getChildFile ("Tambourine_v1.wav") });
+            const int shakerNote = km.getSlot (kNumInstruments + 2).midiNote;
+            km.clearSlot (pad1);   // remove Tambourine
+            check (km.getNumUsedPads() == 2 && km.getSlotName (pad1) == "Shaker" && km.getSlot (pad1).midiNote == shakerNote
+                   && km.getSlot (kNumInstruments + 2).isEmpty() && km.getSlot (kNumInstruments + 2).name.isEmpty(),
+                   "removing a pad removes its name; the next pad moves up with its note");
+            km.clearSlot (pad1);
+            km.setSlotName (pad1, "Tambourine");
+            km.assignFiles (pad1, { dir.getChildFile ("Tambourine_v1.wav"), dir.getChildFile ("Tambourine_v2.wav") });
+            auto t = km.getSlot (pad1); t.midiNote = note1; km.setSlot (pad1, t);
+        }
 
         // save / load keeps the pads
         juce::File kf = dir.getChildFile ("kit.thrumakit");

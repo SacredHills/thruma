@@ -297,8 +297,14 @@ private:
     float offlineRefDb = -20.0f;
     double reanalyseAt = 0.0;
     void installOfflineAudio (std::shared_ptr<const std::vector<float>> audio, int64_t origin, const juce::String& name,
-                              OfflineSource src, std::function<void (const juce::String&)> onDone);
-    void runOfflineAnalysis (bool initial, std::function<void (const juce::String&)> onDone);
+                              OfflineSource src, std::function<void (const juce::String&)> onDone, bool restoreOnly = false);
+    std::shared_ptr<const std::vector<float>> readAudioFile (const juce::File& file, juce::String& error);
+    /** initial: commit the notes and finalize. restoreOnly: a reopened project - show the audio and its
+        waveform again but keep the saved notes. Otherwise: re-analysis after a settings change. */
+    void runOfflineAnalysis (bool initial, std::function<void (const juce::String&)> onDone, bool restoreOnly = false);
+    juce::String offlinePath;          // imported file (saved with the project, reloaded on open)
+    OfflineSource pendingRestore = OfflineSource::None;
+    void restoreOfflineAudio();
     void dropOfflineAudio();
     juce::String detectionSettingsKey() const;
     std::atomic<bool> previewPlaying { false };

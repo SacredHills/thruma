@@ -31,11 +31,11 @@ public:
     std::function<void()> onKitChanged;
 
 private:
-    struct Spot { int slot; bool ellipse; float a, b, c, d; };   // image pixels: ellipse cx,cy,rx,ry / rect x1,y1,x2,y2
     void timerCallback() override;
-    juce::Rectangle<float> imageBounds() const;
-    juce::Path spotPath (const Spot&) const;
-    juce::Path slotPath (int slot) const;            // all spots of a drum, in component coordinates
+    juce::Rectangle<float> imageBounds() const;      // the room picture (16:9)
+    juce::Rectangle<float> kitBounds() const;        // the drums inside it
+    juce::Rectangle<float> slotBounds (int slot) const;
+    void buildMasks();
     juce::Rectangle<float> padBounds (int pad) const; // pad index 0.. (shown pads + the "+" pad)
     int numPadTiles() const;
     int padsPerRow() const;
@@ -49,8 +49,13 @@ private:
     juce::String describe (int slot) const;
 
     ThrumaProcessor& proc;
-    juce::Image photo;
-    std::vector<Spot> spots;
+    juce::Image room, drums;
+    // which drum each kit-picture pixel belongs to (kNone = stand / background), at the picture's resolution
+    static constexpr uint8_t kNone = 255;
+    std::vector<uint8_t> owner;
+    int kitW = 0, kitH = 0;
+    struct Mask { juce::Image lit, glow; juce::Rectangle<int> area, glowArea; };   // in picture pixels
+    std::array<Mask, kNumInstruments> masks;
     std::array<float, kNumKitSlots> glow {};
     std::array<uint32_t, kNumKitSlots> seen {};
     int hover = -1, dropSlot = -1;

@@ -58,6 +58,7 @@ public:
     void removeLayer (int instrument, int layer);
     void removeFile (int instrument, int layer, int fileIndex);
     void autoDistributeVelocities (int instrument);
+    /** Drums: remove the samples. Pads: remove the pad (name, note, mix); later pads move up one place. */
     void clearSlot (int instrument);
     void clearAll();
 

@@ -131,14 +131,27 @@ void LayerRow::resized()
     velHi.setBounds (top.removeFromLeft (92));
     removeBtn.setBounds (top.removeFromRight (70));
     r.removeFromTop (6);
+    layoutChips (r, true);
+}
+
+int LayerRow::layoutChips (juce::Rectangle<int> r, bool apply) const
+{
     int x = r.getX(), y = r.getY();
     for (auto* c : chips)
     {
         const int w = juce::jlimit (60, 180, juce::GlyphArrangement::getStringWidthInt (juce::FontOptions (13.0f), c->getButtonText()) + 20);
         if (x + w > r.getRight() - 130 && x > r.getX()) { x = r.getX(); y += 28; }   // right: "PLAYED"
-        c->setBounds (x, y, w, 24);
+        if (apply) c->setBounds (x, y, w, 24);
         x += w + 6;
     }
+    return y + 24;
+}
+
+int LayerRow::heightForWidth (int width) const
+{
+    // same geometry as resized(): 6 px margins, 24 px header, 6 px gap, then the chip lines
+    const auto area = juce::Rectangle<int> (0, 0, width, 10000).reduced (8, 6).withTrimmedTop (30);
+    return layoutChips (area, false) + 10;
 }
 
 void LayerRow::filesDropped (const juce::StringArray& files, int, int)
@@ -374,10 +387,7 @@ void SamplesPage::resized()
     int y = 0;
     for (auto* row : rows)
     {
-        // height grows with the number of sample chips
-        const int chips = juce::jmax (1, row->getNumChildComponents() - 4);
-        const int perLine = juce::jmax (1, (w - 146) / 120);
-        const int h = 46 + ((chips + perLine - 1) / perLine) * 28;
+        const int h = juce::jmax (64, row->heightForWidth (w));   // grows with its sample chips
         row->setBounds (0, y, w, h);
         y += h + 8;
     }
@@ -486,6 +496,8 @@ void SamplesPage::refreshDetail()
     detailTitle.setTooltip (isPadSlot (selectedInstrument) ? "Double-click to rename this pad" : juce::String());
     const auto slot = proc.getKitManager().getSlot (selectedInstrument);
     midiNote.setValue (juce::jmax (0, slot.midiNote), juce::dontSendNotification);
+    clearInstBtn.setButtonText (isPadSlot (selectedInstrument) ? "Remove" : "Clear");
+    clearInstBtn.setTooltip (isPadSlot (selectedInstrument) ? "Remove this pad" : "Remove this drum's samples");
     rrMode.setSelectedId (slot.rrMode == RoundRobinMode::Random ? 2 : 1, juce::dontSendNotification);
 
     rows.clear();

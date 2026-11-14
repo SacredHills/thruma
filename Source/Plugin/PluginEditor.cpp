@@ -78,9 +78,9 @@ void ThrumaEditor::paint (juce::Graphics& g)
     if (logo.isValid())
     {
         // keep it clear of the tabs
-        const int maxW = juce::jmax (80, tabs[3].getX() - 30);
-        auto area = juce::Rectangle<int> (14, 5, maxW, header.getHeight() - 10);
-        g.drawImage (logo, area.toFloat(), juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid | juce::RectanglePlacement::onlyReduceInSize);
+        // centred between the left edge and the first tab (PLAYER)
+        auto area = juce::Rectangle<int> (0, 0, tabs[3].getX(), header.getHeight()).reduced (12, 5);
+        g.drawImage (logo, area.toFloat(), juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
     }
     else
     {

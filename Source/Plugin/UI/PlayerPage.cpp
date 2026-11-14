@@ -4,31 +4,46 @@
 namespace thruma::ui
 {
 
-static constexpr float kPhotoW = 1672.0f, kPhotoH = 941.0f;   // the hotspots are measured on the original photo
+// the room picture is 16:9; the kit sits in it where the artwork places it (measured on 1920 x 1080)
+static constexpr float kRoomAspect = 1920.0f / 1080.0f;
+static constexpr float kKitX = 348.0f / 1920.0f, kKitY = 408.0f / 1080.0f, kKitW = 1194.0f / 1920.0f, kKitH = 672.0f / 1080.0f;
 static constexpr int kPadH = 58, kPadMinW = 100, kPadGap = 8, kMaxPadRows = 4, kFooterH = 26, kTopH = 40;
+
+namespace
+{
+    // the area each drum takes in the kit picture (1672 x 941 pixels); only its own visible pixels light up.
+    // Front-most first: a pixel belongs to the first drum whose area contains it.
+    bool inEllipse (float x, float y, float cx, float cy, float rx, float ry) { const float dx = (x - cx) / rx, dy = (y - cy) / ry; return dx * dx + dy * dy <= 1.0f; }
+    bool inRect (float x, float y, float x1, float y1, float x2, float y2) { return x >= x1 && x <= x2 && y >= y1 && y <= y2; }
+    bool inShell (float x, float y, float x1, float x2, float top, float topR, float bottom, float bottomR)   // a drum seen from the front
+    {
+        const float cx = 0.5f * (x1 + x2), rx = 0.5f * (x2 - x1);
+        return inEllipse (x, y, cx, top, rx, topR) || inRect (x, y, x1, top, x2, bottom) || inEllipse (x, y, cx, bottom, rx, bottomR);
+    }
+    int drumAt (float x, float y)
+    {
+        using I = Instrument;
+        if (inShell (x, y, 381, 688, 428, 24, 570, 20))   return (int) I::Snare;
+        if (inShell (x, y, 576, 797, 268, 26, 422, 20))   return (int) I::Tom1;
+        if (inShell (x, y, 820, 1042, 263, 26, 422, 20))  return (int) I::Tom2;
+        if (inShell (x, y, 988, 1260, 448, 28, 735, 24))  return (int) I::Tom3;
+        if (inShell (x, y, 1240, 1558, 470, 30, 772, 26)) return (int) I::Tom4;
+        if (inEllipse (x, y, 810, 615, 195, 188) || inRect (x, y, 755, 712, 865, 900)) return (int) I::Kick;
+        if (inEllipse (x, y, 240, 292, 172, 50) || inRect (x, y, 170, 770, 325, 900)) return (int) I::HiHat;
+        if (inEllipse (x, y, 559, 207, 102, 28))   return (int) I::Splash;
+        if (inEllipse (x, y, 447, 133, 182, 52))   return (int) I::Crash;
+        if (inEllipse (x, y, 1097, 133, 172, 54))  return (int) I::Crash2;
+        if (inEllipse (x, y, 1388, 113, 142, 50))  return (int) I::China;
+        if (inEllipse (x, y, 1420, 268, 228, 84))  return (int) I::Ride;
+        return -1;
+    }
+}
 
 PlayerPage::PlayerPage (ThrumaProcessor& p) : proc (p)
 {
-    photo = juce::ImageCache::getFromMemory (BinaryData::kit_jpg, BinaryData::kit_jpgSize);
-
-    using I = Instrument;
-    auto e = [this] (I i, float cx, float cy, float rx, float ry) { spots.push_back ({ (int) i, true, cx, cy, rx, ry }); };
-    auto r = [this] (I i, float x1, float y1, float x2, float y2) { spots.push_back ({ (int) i, false, x1, y1, x2, y2 }); };
-    // front-most first (hit testing takes the first match)
-    r (I::Snare, 380, 413, 686, 588);
-    r (I::Tom1, 578, 246, 795, 440);
-    r (I::Tom2, 822, 242, 1042, 440);
-    r (I::Tom3, 990, 423, 1258, 752);
-    r (I::Tom4, 1242, 445, 1556, 792);
-    e (I::Kick, 810, 615, 190, 182);
-    r (I::Kick, 760, 715, 860, 895);        // pedal
-    e (I::HiHat, 240, 290, 158, 36);
-    r (I::HiHat, 175, 770, 320, 895);       // pedal
-    e (I::Splash, 559, 207, 92, 20);
-    e (I::Crash, 447, 133, 172, 40);
-    e (I::Crash2, 1097, 133, 162, 42);
-    e (I::China, 1413, 113, 150, 38);
-    e (I::Ride, 1425, 263, 212, 56);
+    room = juce::ImageCache::getFromMemory (BinaryData::room_jpg, BinaryData::room_jpgSize);
+    drums = juce::ImageCache::getFromMemory (BinaryData::drums_png, BinaryData::drums_pngSize);
+    buildMasks();
 
     importKitBtn.setTooltip ("Load a whole kit from a folder: drums by name, every other sound onto pads.");
     importKitBtn.onClick = [this] { chooseFiles (-1, false, true); };
@@ -82,25 +97,76 @@ int PlayerPage::padsHeight() const
 juce::Rectangle<float> PlayerPage::imageBounds() const
 {
     auto area = getLocalBounds().toFloat().withTrimmedTop ((float) kTopH).withTrimmedBottom ((float) (padsHeight() + kFooterH + 8));
-    const float scale = juce::jmin (area.getWidth() / kPhotoW, area.getHeight() / kPhotoH);
-    return juce::Rectangle<float> (kPhotoW * scale, kPhotoH * scale).withCentre (area.getCentre());
+    const float w = juce::jmin (area.getWidth(), area.getHeight() * kRoomAspect);
+    return juce::Rectangle<float> (w, w / kRoomAspect).withCentre (area.getCentre());
 }
 
-juce::Path PlayerPage::spotPath (const Spot& s) const
+juce::Rectangle<float> PlayerPage::kitBounds() const
 {
     const auto ib = imageBounds();
-    const float k = ib.getWidth() / kPhotoW;
-    juce::Path p;
-    if (s.ellipse) p.addEllipse (ib.getX() + (s.a - s.c) * k, ib.getY() + (s.b - s.d) * k, 2.0f * s.c * k, 2.0f * s.d * k);
-    else p.addRoundedRectangle (ib.getX() + s.a * k, ib.getY() + s.b * k, (s.c - s.a) * k, (s.d - s.b) * k, 10.0f * k);
-    return p;
+    return { ib.getX() + kKitX * ib.getWidth(), ib.getY() + kKitY * ib.getHeight(), kKitW * ib.getWidth(), kKitH * ib.getHeight() };
 }
 
-juce::Path PlayerPage::slotPath (int slot) const
+juce::Rectangle<float> PlayerPage::slotBounds (int slot) const
 {
-    juce::Path p;
-    for (const auto& s : spots) if (s.slot == slot) p.addPath (spotPath (s));
-    return p;
+    if (slot < 0 || slot >= kNumInstruments || kitW == 0) return {};
+    const auto kb = kitBounds();
+    const float k = kb.getWidth() / (float) kitW;
+    const auto a = masks[(size_t) slot].area.toFloat();
+    return { kb.getX() + a.getX() * k, kb.getY() + a.getY() * k, a.getWidth() * k, a.getHeight() * k };
+}
+
+void PlayerPage::buildMasks()
+{
+    if (! drums.isValid()) return;
+    kitW = drums.getWidth();
+    kitH = drums.getHeight();
+    owner.assign ((size_t) (kitW * kitH), kNone);
+    std::array<juce::Rectangle<int>, kNumInstruments> box {};
+    {
+        const juce::Image::BitmapData px (drums, juce::Image::BitmapData::readOnly);
+        for (int y = 0; y < kitH; ++y)
+            for (int x = 0; x < kitW; ++x)
+            {
+                if (px.getPixelColour (x, y).getAlpha() <= 40) continue;
+                const int d = drumAt ((float) x, (float) y);
+                if (d < 0) continue;
+                owner[(size_t) (y * kitW + x)] = (uint8_t) d;
+                auto& b = box[(size_t) d];
+                b = b.isEmpty() ? juce::Rectangle<int> (x, y, 1, 1) : b.getUnion ({ x, y, 1, 1 });
+            }
+    }
+    const juce::Image::BitmapData src (drums, juce::Image::BitmapData::readOnly);
+    for (int d = 0; d < kNumInstruments; ++d)
+    {
+        auto& m = masks[(size_t) d];
+        m.area = box[(size_t) d];
+        if (m.area.isEmpty()) continue;
+        // the drum's own pixels in the highlight colour
+        m.lit = juce::Image (juce::Image::ARGB, m.area.getWidth(), m.area.getHeight(), true);
+        {
+            juce::Image::BitmapData dst (m.lit, juce::Image::BitmapData::writeOnly);
+            for (int y = 0; y < m.area.getHeight(); ++y)
+                for (int x = 0; x < m.area.getWidth(); ++x)
+                {
+                    const int sx = m.area.getX() + x, sy = m.area.getY() + y;
+                    if (owner[(size_t) (sy * kitW + sx)] != d) continue;
+                    dst.setPixelColour (x, y, colours::hitGlow.withAlpha (src.getPixelColour (sx, sy).getFloatAlpha()));
+                }
+        }
+        // a soft glow around it: blurred at quarter size (cheap), drawn scaled up
+        const int pad = 24;
+        m.glowArea = m.area.expanded (pad);
+        juce::Image small (juce::Image::ARGB, juce::jmax (1, m.glowArea.getWidth() / 4), juce::jmax (1, m.glowArea.getHeight() / 4), true);
+        {
+            juce::Graphics g (small);
+            g.drawImage (m.lit, juce::Rectangle<float> ((float) pad / 4.0f, (float) pad / 4.0f, (float) m.area.getWidth() / 4.0f, (float) m.area.getHeight() / 4.0f));
+        }
+        m.glow = juce::Image (juce::Image::ARGB, small.getWidth(), small.getHeight(), true);
+        juce::ImageConvolutionKernel blur (9);
+        blur.createGaussianBlur (3.0f);
+        blur.applyToImage (m.glow, small, small.getBounds());
+    }
 }
 
 juce::Rectangle<float> PlayerPage::padBounds (int pad) const
@@ -116,8 +182,19 @@ int PlayerPage::slotAt (juce::Point<float> p) const
 {
     for (int i = 0; i < numPadTiles(); ++i)
         if (padBounds (i).contains (p)) return kNumInstruments + i;
-    for (const auto& s : spots)
-        if (spotPath (s).contains (p)) return s.slot;
+    if (kitW == 0) return -1;
+    const auto kb = kitBounds();
+    const float k = (float) kitW / kb.getWidth();
+    const int x0 = (int) ((p.x - kb.getX()) * k), y0 = (int) ((p.y - kb.getY()) * k);
+    // the drum under the pointer, or the nearest one within a few pixels (thin cymbal edges)
+    for (int r = 0; r <= 8; r += 4)
+        for (int dy = -r; dy <= r; dy += 4)
+            for (int dx = -r; dx <= r; dx += 4)
+            {
+                const int x = x0 + dx, y = y0 + dy;
+                if (x < 0 || y < 0 || x >= kitW || y >= kitH) continue;
+                if (const auto o = owner[(size_t) (y * kitW + x)]; o != kNone) return (int) o;
+            }
     return -1;
 }
 
@@ -169,40 +246,35 @@ void PlayerPage::paint (juce::Graphics& g)
 {
     g.fillAll (colours::background);
     const auto ib = imageBounds();
-    if (photo.isValid()) g.drawImage (photo, ib, juce::RectanglePlacement::stretchToFit);
+    if (room.isValid()) g.drawImage (room, ib, juce::RectanglePlacement::stretchToFit);
+    const auto kb = kitBounds();
+    if (drums.isValid()) g.drawImage (drums, kb, juce::RectanglePlacement::stretchToFit);
 
     auto& km = proc.getKitManager();
-    // drums: light up when played; outline on hover / drop
+    // drums light up (their own pixels, plus a soft glow) when hit; amber while dropping files on one
+    const float k = kitW > 0 ? kb.getWidth() / (float) kitW : 1.0f;
+    auto toScreen = [&] (juce::Rectangle<int> r)
+    {
+        return juce::Rectangle<float> (kb.getX() + (float) r.getX() * k, kb.getY() + (float) r.getY() * k, (float) r.getWidth() * k, (float) r.getHeight() * k);
+    };
     for (int slot = 0; slot < kNumInstruments; ++slot)
     {
+        const auto& m = masks[(size_t) slot];
+        if (! m.lit.isValid()) continue;
         const float gl = glow[(size_t) slot];
-        const bool hot = slot == dropSlot;   // only while dropping files on it
-        if (gl <= 0.0f && ! hot) continue;
-        const auto path = slotPath (slot);
-        if (path.isEmpty()) continue;
         if (gl > 0.0f)
         {
-            for (int k = 3; k >= 1; --k)   // soft glow
-            {
-                g.setColour (colours::hitGlow.withAlpha (0.12f * gl));
-                g.strokePath (path, juce::PathStrokeType (6.0f * (float) k));
-            }
-            g.setColour (colours::hitGlow.withAlpha (0.38f * gl));
-            g.fillPath (path);
+            g.setOpacity (juce::jmin (1.0f, 0.9f * gl));
+            g.drawImage (m.glow, toScreen (m.glowArea));
+            g.setOpacity (0.55f * gl);
+            g.drawImage (m.lit, toScreen (m.area));
         }
-        if (hot)
+        if (slot == dropSlot)
         {
-            g.setColour (colours::trigger);
-            g.strokePath (path, juce::PathStrokeType (2.0f));
-            const auto b = path.getBounds();
-            const auto label = km.getSlotName (slot);
-            g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-            const auto lb = juce::Rectangle<float> (b.getCentreX() - 60.0f, b.getY() - 24.0f, 120.0f, 20.0f);
-            g.setColour (colours::background.withAlpha (0.75f));
-            g.fillRoundedRectangle (lb, 4.0f);
-            g.setColour (colours::text);
-            g.drawText (label, lb, juce::Justification::centred);
+            g.setOpacity (0.35f);
+            g.drawImage (m.lit, toScreen (m.area));
         }
+        g.setOpacity (1.0f);
     }
 
     // pads (extra kit sounds) under the picture
@@ -263,7 +335,7 @@ void PlayerPage::mouseDown (const juce::MouseEvent& e)
     float vel = 0.9f;
     if (! isPadSlot (slot))
     {
-        const auto b = slotPath (slot).getBounds();
+        const auto b = slotBounds (slot);
         const float d = b.getCentre().getDistanceFrom (e.position) / juce::jmax (1.0f, 0.5f * juce::jmin (b.getWidth(), b.getHeight()));
         vel = juce::jlimit (0.35f, 1.0f, 1.05f - 0.45f * d);
     }
@@ -284,7 +356,8 @@ void PlayerPage::showMenu (int slot)
     menu.addItem (4, "Edit layers in SAMPLES...");
     if (! isPadSlot (slot)) menu.addItem (5, "Track this drum on REPLACE");
     else menu.addItem (6, "Rename pad...");
-    menu.addItem (7, "Clear samples", ! m.isEmpty());
+    if (isPadSlot (slot)) menu.addItem (7, "Remove pad");
+    else menu.addItem (7, "Clear samples", ! m.isEmpty());
     juce::PopupMenu files;
     int id = 100;
     std::vector<juce::File> fileIds;

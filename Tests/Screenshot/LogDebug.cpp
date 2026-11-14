@@ -137,7 +137,7 @@ int main()
 
         ph.playing = false; ph.pos = 0;
         juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
-        buf.clear(); proc->processBlock (buf, midi);   // the DAW has stopped
+        buf.clear(); midi.clear(); proc->processBlock (buf, midi);   // the DAW has stopped
         check (proc->locateTo (48000 * 2).isEmpty(), "ruler click sets the preview position");
         proc->togglePlay();
         float pk = 0;
@@ -170,7 +170,7 @@ int main()
         std::unique_ptr<ThrumaProcessor> p2 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
         PH ph2; ph2.playing = false; p2->setPlayHead (&ph2); p2->prepareToPlay (48000.0, 512);
         juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
-        buf.clear(); p2->processBlock (buf, midi);   // the host tells the plugin its track while processing
+        buf.clear(); midi.clear(); p2->processBlock (buf, midi);   // the host tells the plugin its track while processing
         check (p2->canReadHostTrack(), "plugin found the host API and its track");
         juce::String result;
         p2->analyseTrack ([&] (const juce::String& m) { result = m; });
@@ -211,12 +211,14 @@ int main()
         }
         check (l > 0.3f && std::abs (l - r) < 0.01f, "no main input: MIDI plays on both channels (L " + juce::String (l, 2) + ", R " + juce::String (r, 2) + ")");
 
-        // sidechain drum (in the first channels) triggers the snare, on both sides
+        // sidechain drum (in the first channels) triggers the snare, on both sides (after the MIDI note's
+        // 2-second window: while MIDI plays the kit, audio is not tracked)
+        for (int blk = 0; blk < 200; ++blk) { buf.clear(); midi.clear(); ph3.pos = (20 + blk) * 512; p3->processBlock (buf, midi); }
         std::mt19937 rng (3); std::uniform_real_distribution<float> u (-1, 1);
         int hitsL = 0; float rr = 0;
         for (int64_t pos = 0; pos < 48000 * 4; pos += 512)
         {
-            ph3.pos = 20 * 512 + pos; midi.clear();
+            ph3.pos = 220 * 512 + pos; midi.clear();
             for (int i = 0; i < 512; ++i)
             {
                 const double t = std::fmod ((double) (pos + i) / 48000.0, 0.5);
@@ -291,7 +293,7 @@ int main()
             return pk;
         };
         const float full = peakAt (1.0f), quarter = peakAt (0.25f);
-        check (full > 0.3f && std::abs (quarter / full - 0.25f) < 0.03f, "Blend scales MIDI-played samples with no snare samples loaded: "
+        check (full > 0.3f && std::abs (quarter - full) < 0.01f, "MIDI-played samples play at full level whatever the Blend (MIDI is a sample player): "
                + juce::String (quarter, 3) + " vs " + juce::String (full, 3));
     }
 
@@ -322,7 +324,7 @@ int main()
         pump (300);
         p8->togglePlay();
         juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
-        for (int blk = 0; blk < 40; ++blk) { buf.clear(); p8->processBlock (buf, midi); }
+        for (int blk = 0; blk < 40; ++blk) { buf.clear(); midi.clear(); p8->processBlock (buf, midi); }
         pump (100);
 
         // a real mouse click on the ruler, 12 s into the song
@@ -342,17 +344,17 @@ int main()
             lc->mouseDown (e);
             lc->mouseUp (e);
         }
-        for (int blk = 0; blk < 4; ++blk) { buf.clear(); p8->processBlock (buf, midi); }
+        for (int blk = 0; blk < 4; ++blk) { buf.clear(); midi.clear(); p8->processBlock (buf, midi); }
         pump (100);
         const auto head = p8->getPlayheadPosition();
         p8->togglePlay();
         fakeLocated = -1;
-        buf.clear(); p8->processBlock (buf, midi);
+        buf.clear(); midi.clear(); p8->processBlock (buf, midi);
         const auto stoppedWhy = p8->locateTo (48000 * 7);
         check (stoppedWhy.isEmpty() && fakeLocated == 48000 * 7, "stopped, imported audio: a ruler click also moves the DAW's playhead (RAVENYR)");
         p8->togglePlay();
         p8->locateTo ((int64_t) target);
-        for (int blk = 0; blk < 4; ++blk) { buf.clear(); p8->processBlock (buf, midi); }
+        for (int blk = 0; blk < 4; ++blk) { buf.clear(); midi.clear(); p8->processBlock (buf, midi); }
         check (p8->isPreviewPlaying() && std::abs ((double) p8->getPlayheadPosition() - target) < 48000 / 4, "ruler click during in-plugin playback jumps there: playhead "
                + juce::String ((double) head / 48000.0, 2) + " s");
 
@@ -364,7 +366,7 @@ int main()
             double xy = 0, xx = 0, yy = 0;
             const int L = p8->getLatencySamples();
             std::vector<float> outv;
-            for (int blk = 0; blk < 300; ++blk) { buf.clear(); p8->processBlock (buf, midi); for (int i = 0; i < 512; ++i) outv.push_back (buf.getSample (0, i)); }
+            for (int blk = 0; blk < 300; ++blk) { buf.clear(); midi.clear(); p8->processBlock (buf, midi); for (int i = 0; i < 512; ++i) outv.push_back (buf.getSample (0, i)); }
             // compare with the imported audio at the same song positions
             const auto& cap = p8->getCapture();
             for (size_t i = 48000; i < outv.size(); ++i)
@@ -382,12 +384,12 @@ int main()
         pump (60);
         ph8.playing = true; ph8.pos = 48000 * 3;
         float pkHost = 0;
-        for (int blk = 0; blk < 100; ++blk) { buf.clear(); p8->processBlock (buf, midi); ph8.pos += 512; pkHost = std::max (pkHost, buf.getMagnitude (0, 0, 512)); }
+        for (int blk = 0; blk < 100; ++blk) { buf.clear(); midi.clear(); p8->processBlock (buf, midi); ph8.pos += 512; pkHost = std::max (pkHost, buf.getMagnitude (0, 0, 512)); }
         check (pkHost > 0.3f, "DAW playing with silent input: the imported drum plays at Blend 0 % (peak " + juce::String (pkHost, 2) + ")");
         fakeLocated = -1;
         const auto why = p8->locateTo (48000);
         check (why.isNotEmpty() || fakeLocated == 48000, "ruler click while the DAW plays: moves a DAW that allows it (RAVENYR), else explains");
-        ph8.playing = false; buf.clear(); p8->processBlock (buf, midi);
+        ph8.playing = false; buf.clear(); midi.clear(); p8->processBlock (buf, midi);
         check (c0 > 0.98, "imported audio, Blend 0 %: the original (correlation " + juce::String (c0, 3) + ")");
         check (c1 < 0.3, "imported audio, Blend 100 %: samples only (correlation " + juce::String (c1, 3) + ")");
 
@@ -552,7 +554,7 @@ int main()
                 buf.clear(); midi.clear(); p9->processBlock (buf, midi);
                 l = std::max (l, buf.getMagnitude (0, 0, 512)); r = std::max (r, buf.getMagnitude (1, 0, 512));
             }
-            for (int blk = 0; blk < 20; ++blk) { buf.clear(); p9->processBlock (buf, midi); }   // let it ring out
+            for (int blk = 0; blk < 20; ++blk) { buf.clear(); midi.clear(); p9->processBlock (buf, midi); }   // let it ring out
             return { l, r };
         };
         const int sn = (int) Instrument::Snare;
@@ -590,19 +592,56 @@ int main()
         check (hm.slots[(size_t) Instrument::Crash2].count.load() == c2 + 1, "MIDI note 57 plays Crash 2");
     }
 
+    // ---- 5e) MIDI drives the kit: no audio replacing at the same time ----
+    {
+        std::unique_ptr<ThrumaProcessor> pm (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH phm; phm.playing = true; pm->setPlayHead (&phm); pm->prepareToPlay (48000.0, 512);
+        pm->getKitManager().assignFiles ((int) Instrument::Snare, { click });
+        pm->getKitManager().assignFiles ((int) Instrument::Kick, { click });
+        pm->rebuildKit(); pump (100);
+        std::mt19937 rng (2); std::uniform_real_distribution<float> u (-1, 1);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        const auto& hm = pm->getHitMonitor();
+        auto snareHits = [&] { return hm.slots[(size_t) Instrument::Snare].count.load(); };
+        auto playDrum = [&] (int64_t from, int64_t to, bool sendMidi)
+        {
+            for (int64_t pos = from; pos < to; pos += 512)
+            {
+                phm.pos = pos; midi.clear();
+                for (int i = 0; i < 512; ++i)
+                {
+                    const double t = std::fmod ((double) (pos + i) / 48000.0, 0.5);
+                    const float v = (float) (0.5 * std::exp (-t / 0.04)) * u (rng);
+                    buf.setSample (0, i, v); buf.setSample (1, i, v);
+                }
+                if (sendMidi && ((pos - from) / 512) % 20 == 0) midi.addEvent (juce::MidiMessage::noteOn (10, 36, (juce::uint8) 100), 0);
+                pm->processBlock (buf, midi);
+            }
+        };
+        playDrum (0, 48000 * 4, false);
+        const auto tracked = snareHits();
+        check (tracked >= 6, "audio alone: the snare is tracked and replaced (" + juce::String ((int) tracked) + " hits)");
+        const auto kickBefore = hm.slots[(size_t) Instrument::Kick].count.load();
+        playDrum (48000 * 4, 48000 * 8, true);
+        check (snareHits() == tracked && hm.slots[(size_t) Instrument::Kick].count.load() > kickBefore && pm->isMidiDriving(),
+               "while MIDI plays the kit, audio is not replaced (snare hits " + juce::String ((int) (snareHits() - tracked)) + ")");
+        playDrum (48000 * 8, 48000 * 12, false);
+        check (snareHits() > tracked && ! pm->isMidiDriving(), "two seconds after the MIDI stops, tracking resumes");
+    }
+
     // ---- 6) stopped host: the playhead stays put ----
     {
         std::unique_ptr<ThrumaProcessor> p5 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
         PH ph5; ph5.playing = true; ph5.pos = 0; p5->setPlayHead (&ph5); p5->prepareToPlay (48000.0, 512);
         juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
-        buf.clear(); p5->processBlock (buf, midi);          // the host has played once
+        buf.clear(); midi.clear(); p5->processBlock (buf, midi);          // the host has played once
         ph5.playing = false; ph5.pos = 96000;
         for (int blk = 0; blk < 50; ++blk) { for (int i = 0; i < 512; ++i) { buf.setSample (0, i, 0.3f * std::sin (i * 0.3f)); buf.setSample (1, i, 0.3f * std::sin (i * 0.3f)); } p5->processBlock (buf, midi); }
         check (! p5->isTransportPlaying() && p5->getPlayheadPosition() == 96000, "stopped host with audio coming in: not playing, playhead at the host cursor (" + juce::String (p5->getPlayheadPosition()) + ")");
         // a host that keeps its position running while stopped, after it has reported play once
-        ph5.playing = true; buf.clear(); p5->processBlock (buf, midi);
+        ph5.playing = true; buf.clear(); midi.clear(); p5->processBlock (buf, midi);
         ph5.playing = false;
-        for (int blk = 0; blk < 50; ++blk) { ph5.pos += 512; buf.clear(); p5->processBlock (buf, midi); }
+        for (int blk = 0; blk < 50; ++blk) { ph5.pos += 512; buf.clear(); midi.clear(); p5->processBlock (buf, midi); }
         check (! p5->isTransportPlaying(), "position running while the host says stopped: treated as stopped");
     }
 

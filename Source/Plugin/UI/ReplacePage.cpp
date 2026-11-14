@@ -184,6 +184,7 @@ void ReplacePage::timerCallback()
     juce::String s;
     using OS = ThrumaProcessor::OfflineSource;
     const auto off = proc.getOfflineSource();
+    if (proc.isMidiDriving()) s << "MIDI is playing the kit - audio tracking and replacing are paused.\n";
     if (off == OS::File) s << "Imported audio: " << proc.getOfflineName() << (proc.isPreviewPlaying() ? " (playing in Thruma)" : "");
     else if (off == OS::HostTrack) s << "Analysed the whole track";
     else if (off == OS::Heard) s << "Analysed what was played";

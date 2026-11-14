@@ -142,6 +142,7 @@ A channel strip for every drum and pad: **volume** fader (−inf to +12 dB), **p
 
 ## MIDI
 - On a MIDI / instrument track, the track's MIDI clips play the kit (Thruma is a drum sample player there).
+- Whenever MIDI plays the kit (MIDI notes coming in, or an imported MIDI file playing), Thruma is only a sample player: audio tracking and replacing pause, any audio input passes through untouched and MIDI-played samples play at full level (Blend does not apply). Tracking resumes two seconds after the MIDI stops.
 - Thruma's MIDI output sends every hit as a note on channel 10. Route it to a drum instrument in your DAW.
 - MIDI notes sent *into* Thruma play the kit sound with that MIDI note.
 

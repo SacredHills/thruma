@@ -446,6 +446,12 @@ void ThrumaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     hostBridge.noteCurrentTrack();
 
+    // MIDI drives the kit (MIDI clips / notes in, or an imported MIDI file playing): then Thruma is a sample player
+    // only - audio tracking and replacing pause, the input passes untouched, MIDI-played samples at full level
+    for (const auto meta : midi)
+        if (meta.getMessage().isNoteOn()) { samplesSinceMidi = 0; break; }
+    samplesSinceMidi = std::min<int64_t> (samplesSinceMidi + total, std::numeric_limits<int32_t>::max());
+
     int newMode = 0;
     if (hostPlaying || advancing) { newMode = 1; hostTimelineSeen = true; }   // follow the host transport
     else if (! hostTimelineSeen && signalPresent) newMode = 2;              // host gives no moving position: own clock
@@ -547,6 +553,12 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
     // --- parameters ---
     ReplaceSettings rs; DebleedSettings ds; ReferenceSource refSrc; bool midiOutOn;
     readParameters (rs, ds, refSrc, midiOutOn);
+    {
+        const bool midiFilePlaying = midiFileNotes.load (std::memory_order_relaxed) > 0 && blockPlaying && blockHasBeat;
+        const bool driving = midiFilePlaying || samplesSinceMidi < (int64_t) (2.0 * currentRate);
+        midiDriving.store (driving, std::memory_order_relaxed);
+        if (driving) rs.enabled = false;
+    }
     if (rs.detector.instrument != lastInstrument)
     {
         // a learned detection model belongs to one instrument
@@ -1348,6 +1360,7 @@ bool ThrumaProcessor::loadMidiFileData (const juce::MemoryBlock& data, const juc
     if (seq->notes.empty()) { message = name + " has no notes."; return false; }
     const auto count = (int) seq->notes.size();
     midiSeqPublisher.publish (std::move (seq));
+    midiFileNotes.store (count);
     markStateChanged();
     midiFileData = data;
     midiFileName = name;
@@ -1366,6 +1379,7 @@ void ThrumaProcessor::clearMidiFile()
 {
     if (midiFileName.isEmpty() && midiSeqPublisher.getLatest() == nullptr) return;
     midiSeqPublisher.publish (std::make_unique<MidiSequence>());
+    midiFileNotes.store (0);
     markStateChanged();
     midiFileData.reset();
     midiFileName = {};

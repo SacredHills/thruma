@@ -151,6 +151,8 @@ public:
     void clearMidiFile();
     juce::String getMidiFileName() const { return midiFileName; }
     int getMidiFileNoteCount() const;
+    /** MIDI is playing the kit right now (audio tracking / replacing paused). */
+    bool isMidiDriving() const { return midiDriving.load(); }
 
     /** Detection level / threshold history on the host timeline (one value per kEnvBin samples). */
     static constexpr int kEnvBin = DetectionScope::kDecim;
@@ -313,6 +315,9 @@ private:
     std::atomic<int64_t> previewPos { 0 };
     std::atomic<bool> previewMode { false };
     bool hostReportsPlayFlag = false;   // audio thread
+    int64_t samplesSinceMidi = std::numeric_limits<int32_t>::max();   // audio thread
+    std::atomic<bool> midiDriving { false };
+    std::atomic<int> midiFileNotes { 0 };
     std::atomic<bool> stateChanged { false };   // imported audio loaded: the stopped playhead is the preview position
 
     struct MidiSequence { std::vector<MidiBeatNote> notes; };   // sorted by beat

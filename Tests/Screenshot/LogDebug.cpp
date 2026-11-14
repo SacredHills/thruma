@@ -252,7 +252,7 @@ int main()
         const int before = pq->getOfflineMessageCount();
         if (auto* prm = pq->apvts.getParameter (ids::repMatch)) prm->setValueNotifyingHost (0.2f);
         for (int i = 0; i < 100 && pq->getOfflineMessageCount() == before; ++i) pump (50);
-        check (pq->getOfflineMessageCount() > before, "changing Match re-analyses: " + pq->getOfflineMessage());
+        check (pq->getOfflineMessageCount() > before, "changing Tolerance re-analyses: " + pq->getOfflineMessage());
         const int before2 = pq->getOfflineMessageCount();
         if (auto* prm = pq->apvts.getParameter (ids::repAmount)) prm->setValueNotifyingHost (0.8f);
         for (int i = 0; i < 100 && pq->getOfflineMessageCount() == before2; ++i) pump (50);

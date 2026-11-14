@@ -17,6 +17,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 
 namespace thruma
 {
@@ -88,6 +89,12 @@ public:
 
     /** Distance (dB RMS) between a hit shape and a template. */
     static float shapeDistance (const std::array<float, SpectralTemplate::kBands>& a, const SpectralTemplate& t) noexcept;
+    /** The same after removing the overall spectral tilt (a softer, darker hit of the same drum matches). */
+    static float shapeDistanceNoTilt (const std::array<float, SpectralTemplate::kBands>& a, const SpectralTemplate& t) noexcept;
+
+    /** Level of bleed-like events relative to the hits (dB, < 0), e.g. measured over a whole take; NaN = learn it. */
+    void setBleedLevel (float relDb) noexcept;
+    float getBleedLevel() const noexcept { return bleedKnown() ? bleedRelDb : std::numeric_limits<float>::quiet_NaN(); }
 
     /** Maximum number of samples between an onset and the moment it is reported. */
     int getMaxReportDelay() const noexcept { return backtrack + velWindow + 1; }
@@ -174,7 +181,13 @@ private:
     bool hasRejection = false;
     int64_t tooSoonReportedFor = -1;   // onset of the hit whose retrigger window already reported a TooSoon
     float trigFloorMarginDb = 8;
-    bool matchOff = false;
+    // bleed-like events on this track, relative to the hits
+    float bleedRelDb = 0.0f;
+    int bleedCount = 0;
+    bool bleedFixed = false;
+    static constexpr int kBleedBins = 60;   // 1 dB bins below the hits
+    std::array<int, kBleedBins> bleedHist {};
+    bool bleedKnown() const noexcept { return bleedCount >= 8; }
     std::array<float, SpectralTemplate::kBands> lastHitShape {};
     bool lastHitShapeValid = false;
     float lastHitAtkDb = -150.0f;

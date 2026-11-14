@@ -1,3 +1,4 @@
+#include <limits>
 #include "Triggers.h"
 
 #include <algorithm>
@@ -193,6 +194,9 @@ std::vector<Trigger> analyseTake (const float* audio, int64_t length, double sam
     }
 
     // pass 2: fixed take reference and fingerprint -> consistent velocities and decisions over the whole take
+    // (and the take's bleed level, re-expressed against the take reference)
+    const float bleedAbs = std::isfinite (det.getBleedLevel()) ? det.getBleedLevel() + det.getVelocityReference() : std::numeric_limits<float>::quiet_NaN();
+    det.setBleedLevel (std::isfinite (bleedAbs) ? std::min (-1.0f, bleedAbs - ref) : std::numeric_limits<float>::quiet_NaN());
     det.setVelocityReference (ref);
     det.setSpectralTemplate (tmpl);
     det.reset (0);

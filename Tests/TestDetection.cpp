@@ -2,6 +2,7 @@
 #include "TestSignals.h"
 
 #include "TransientDetector.h"
+#include "DspUtils.h"
 #include "Triggers.h"
 
 using namespace thruma;
@@ -311,3 +312,4 @@ TEST_CASE ("Detection: Amount and Match controls, rejected hits report a reason"
     CHECK (missedByThreshold > 0);
     CHECK (recovered >= missedByThreshold * 6 / 10);
 }
+

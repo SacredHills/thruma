@@ -283,7 +283,7 @@ juce::String ThrumaProcessor::describe (const TriggerPoint& p)
         case RejectReason::TooQuiet: return "Too quiet: " + juce::String (p.peakDb, 1) + " dB, threshold " + juce::String (p.thresholdDb, 1)
                                             + " dB (raise Sensitivity or drag the threshold down)";
         case RejectReason::NoAttack: return "No clear attack: sounded like the last hit still ringing (raise Amount)";
-        case RejectReason::Bleed:    return "Sounded like bleed from another drum (lower Match)";
+        case RejectReason::Bleed:    return "Sounded like bleed from another drum (raise Tolerance)";
         case RejectReason::TooSoon:  return "Too soon after the previous hit (lower Retrigger in Advanced)";
         case RejectReason::None:     break;
     }
@@ -435,7 +435,7 @@ void ThrumaProcessor::readParameters (ReplaceSettings& rs, DebleedSettings& ds, 
     rs.detector.doubleHits = v (ids::repDouble) > 0.5f;
     rs.detector.frequencyFocus = v (ids::repFocus) > 0.5f;
     rs.detector.amount = v (ids::repAmount) * 0.01f;
-    rs.detector.match = v (ids::repMatch) * 0.01f;
+    rs.detector.match = 1.0f - v (ids::repMatch) * 0.01f;   // Tolerance up = looser match
     rs.detector.dynamicRangeDb = v (ids::repDynRange);
     rs.playback.velocityResponse = v (ids::repVelResp) * 0.01f;
     rs.playback.dynamicRangeDb = v (ids::repDynRange);

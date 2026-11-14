@@ -44,8 +44,8 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
       output (p.apvts, ids::repOutput, "Output", "Output level."),
       amount (p.apvts, ids::repAmount, "Amount", "How easily a possible hit is noticed. Raise it when quiet or fast hits are missed "
                                                   "(more dim trigger points appear); lower it if notes appear where nothing was played."),
-      match (p.apvts, ids::repMatch, "Match", "How much a hit has to sound like this drum rather than bleed from the others. "
-                                                "Lower it when real hits are missed as 'bleed'; raise it when bleed becomes notes. 0 % = off."),
+      match (p.apvts, ids::repMatch, "Tolerance", "How different from this drum's own sound a hit may be. Raise it when real hits are "
+                                                    "marked 'sounded like bleed'; lower it when bleed from other drums becomes notes."),
       dragMidi (p),
       advanced (p.apvts)
 {
@@ -170,7 +170,7 @@ void ReplacePage::resized()
     layoutRows (col1.removeFromTop (70), { &sensitivity, &velocity }, 30, 10);
     layoutRows (c.removeFromTop (70), { &blend, &output }, 30, 10);
 
-    // Amount and Match: two knobs centred under the Velocity slider's track
+    // Amount and Tolerance: two knobs centred under the Velocity slider's track
     col1.removeFromTop (8);
     const int nameW = juce::jmin (130, velocity.getWidth() / 3);
     const int trackL = velocity.getX() + nameW, trackR = velocity.getRight() - 72;
@@ -190,7 +190,7 @@ ReplacePage::AdvancedPanel::AdvancedPanel (APVTS& s)
       retrig (s, ids::repRetrig, "Retrigger", "Minimum time between hits. 0 = the drum's default. Lower it if fast hits are missed as 'too soon'."),
       dynRange (s, ids::repDynRange, "Dynamic Range", "Level range mapped onto velocity 1-127."),
       doubleHits (s, ids::repDouble, "Double hits", "Detect flams, drags and fast doubles while the previous hit still rings."),
-      focus (s, ids::repFocus, "Frequency focus", "Reject hits whose sound does not match the drum (bleed protection). Same as Match 0 % when off.")
+      focus (s, ids::repFocus, "Frequency focus", "Reject hits whose sound does not match the drum (bleed protection).")
 {
     addAndMakeVisible (bg);
     for (auto* c : std::initializer_list<juce::Component*> { &ghost, &retrig, &dynRange, &doubleHits, &focus }) addAndMakeVisible (c);

@@ -86,6 +86,29 @@ float TransientDetector::shapeDistance (const std::array<float, SpectralTemplate
     return n > 0 ? (float) std::sqrt (sum / n) : 0.0f;
 }
 
+float TransientDetector::shapeDistanceNoTilt (const std::array<float, SpectralTemplate::kBands>& a, const SpectralTemplate& t) noexcept
+{
+    // remove the best-fitting straight line (overall brightness) from the difference, then measure what is left
+    constexpr int N = SpectralTemplate::kBands;
+    std::array<float, N> d;
+    float mean = 0.0f;
+    for (int i = 0; i < N; ++i) { d[(size_t) i] = std::clamp (a[(size_t) i] - t.shape[(size_t) i], -20.0f, 20.0f); mean += d[(size_t) i]; }
+    mean /= (float) N;
+    const float mx = 0.5f * (float) (N - 1);
+    float sxy = 0.0f, sxx = 0.0f;
+    for (int i = 0; i < N; ++i) { sxy += ((float) i - mx) * (d[(size_t) i] - mean); sxx += ((float) i - mx) * ((float) i - mx); }
+    const float slope = sxy / sxx;
+    double sum = 0.0;
+    for (int i = 0; i < N; ++i) { const double r = d[(size_t) i] - mean - slope * ((float) i - mx); sum += r * r; }
+    return (float) std::sqrt (sum / N);
+}
+
+void TransientDetector::setBleedLevel (float relDb) noexcept
+{
+    if (std::isfinite (relDb) && relDb < 0.0f) { bleedRelDb = relDb; bleedCount = 1000; bleedFixed = true; }
+    else { bleedFixed = false; bleedCount = 0; bleedHist.fill (0); }
+}
+
 void TransientDetector::updateDerived() noexcept
 {
     const auto& p = getProfile (settings.instrument);
@@ -140,7 +163,6 @@ void TransientDetector::updateDerived() noexcept
     // those other checks from there.
     const float sA = std::clamp (s + (std::clamp (settings.amount, 0.0f, 1.0f) - 0.5f) * 0.8f, 0.0f, 0.95f);
     const float sM = std::clamp (s - (std::clamp (settings.match, 0.0f, 1.0f) - 0.5f) * 0.8f, 0.0f, 1.2f);
-    matchOff = settings.match < 0.03f;   // 0 %: every possible hit above the threshold counts
 
     riseThrDb     = lerp (14.0f, 4.0f, sA);
     riseFastDb    = lerp (9.0f, 3.0f, sA);    // right after real hits (fast playing) a smaller fresh attack suffices
@@ -201,6 +223,7 @@ void TransientDetector::reset (int64_t startPosition) noexcept
     lastHitAtkDb = -150.0f;
     hasRejection = false;
     tooSoonReportedFor = -1;
+    if (! bleedFixed) { bleedCount = 0; bleedRelDb = 0.0f; bleedHist.fill (0); }
 }
 
 float TransientDetector::velocityFor (float peakDb) const noexcept
@@ -359,7 +382,7 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             const bool riseOk = bodyRiseOk
                              || (atkRise >= 0.6f * riseThrDb && peakDb >= lastHitPeakDb - 10.0f && atkPeakDb >= atkRefDb - atkRefMargin
                                  && atkPeakDb >= lastHitAtkDb - 8.0f);
-            const bool focusOk = matchOff || ! settings.frequencyFocus || (peakDb - fullDb) >= focusMinDb;
+            const bool focusOk = ! settings.frequencyFocus || (peakDb - fullDb) >= focusMinDb;
 
             // spectral fingerprint of this candidate
             // (band levels relative to their mean, each band floored 40 dB below the loudest)
@@ -378,7 +401,8 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             const bool confident = peakDb >= refDb - 6.0f;
             bool shapeOk = true;
             float dist = 0.0f;
-            if (! confident && ! matchOff && settings.frequencyFocus && tmpl.isValid())
+            bool soundsLikeDrum = true;   // after allowing for a softer (darker) hit
+            if (! confident && settings.frequencyFocus && tmpl.isValid())
             {
                 dist = shapeDistance (shape, tmpl);
                 // the quieter the candidate (closer to the bleed level), the closer it must sound like the drum
@@ -386,6 +410,12 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                 // candidates accepted under the looser fast-playing rules must sound even more like the drum
                 const float fastPenalty = (! rearmed && (candStart - lastOnset) < fastWindow) ? 0.75f : 1.0f;
                 shapeOk = dist <= specThrDb * (1.0f - 0.45f * depth) * fastPenalty;
+                // Far louder than anything bleed-like on this track: it cannot be bleed. Softer hits of the drum
+                // sound darker than the loud ones the fingerprint was learned from, so compare without the overall
+                // tilt and without the quieter-must-match-closer penalty.
+                soundsLikeDrum = shapeDistanceNoTilt (shape, tmpl) <= specThrDb * fastPenalty;
+                if (! shapeOk && bleedKnown() && peakDb - refDb >= bleedRelDb + 10.0f)
+                    shapeOk = soundsLikeDrum;
             }
 
             state = State::Idle;
@@ -475,6 +505,20 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                     && peakDb >= bodyFloorDb + floorMarginDb + 6.0f && peakDb >= -90.0f)
                     refDb = std::max (peakDb, refDb - std::min (6.0f, 0.5f * (absThr - peakDb) + 1.5f));
                 cooldownUntil = pos + velWindow / 2;
+                // how loud bleed-like events are on this track (relative to the hits): everything that started like
+                // a hit but was not one. A slow average, robust to the odd rejected real hit.
+                // Only candidates that start once the drum has decayed (its own ring between fast hits is not bleed);
+                // the median of them, so the odd rejected real hit does not move it.
+                // (a rejected candidate that does sound like a softer hit of the drum is not counted as bleed)
+                if (! bleedFixed && rearmed && peakDb > bodyFloorDb + 3.0f && ! (focusOk && soundsLikeDrum && levelOk))
+                {
+                    const int bin = std::clamp ((int) std::floor (refDb - peakDb), 0, kBleedBins - 1);
+                    ++bleedHist[(size_t) bin];
+                    if (++bleedCount > 600) { bleedCount = 0; for (auto& h : bleedHist) { h /= 2; bleedCount += h; } }   // slowly forget
+                    int acc = 0, median = 0;
+                    for (int b = 0; b < kBleedBins; ++b) { acc += bleedHist[(size_t) b]; if (acc * 2 >= bleedCount) { median = b; break; } }
+                    bleedRelDb = -((float) median + 0.5f);
+                }
                 // near misses become dim trigger points (with the reason), so they can be checked and added
                 if (peakDb >= absThr - 18.0f && peakDb >= bodyFloorDb + floorMarginDb * 0.5f)
                 {

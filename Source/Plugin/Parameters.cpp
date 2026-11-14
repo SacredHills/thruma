@@ -95,7 +95,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
     // --- Replace: trigger points (added later: kept at the end so existing automation keeps its order) ---
     layout.add (pct (ids::repAmount, "Amount", 50.0f));
-    layout.add (pct (ids::repMatch, "Match", 50.0f));
+    layout.add (pct (ids::repMatch, "Tolerance", 50.0f));   // id kept from when it was "Match" (inverted)
     return layout;
 }
 

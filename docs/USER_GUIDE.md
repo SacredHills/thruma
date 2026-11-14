@@ -66,7 +66,7 @@ The panel also shows the note count, whether Thruma is listening, and how many s
 | **Sensitivity** | The same as dragging the threshold. Higher catches quieter hits; lower ignores more bleed. At 0 % only hits close to your loudest ones count |
 | **Velocity** | 0 % = every hit at full level, 100 % = follow the played dynamics |
 | **Amount** (knob) | How easily a possible hit is noticed at all. Raise it when quiet or fast hits are missed (more rings appear); lower it if notes appear where nothing was played |
-| **Match** (knob) | How much a hit must sound like this drum rather than bleed from the others. Lower it when real hits show as *sounded like bleed*; raise it when bleed turns into notes. 0 % switches the check off |
+| **Tolerance** (knob) | How different from this drum's own sound a hit may be. Raise it when real hits show as *sounded like bleed*; lower it when bleed from other drums turns into notes. Both knobs: up = catch more |
 | **Advanced…** | Ghost Notes (quiet ghost notes), Retrigger (minimum time between hits, 0 = the drum's default; lower it for hits marked *too soon*), Dynamic Range (level range mapped onto velocity), Double hits (flams, drags, fast doubles), Frequency focus (bleed protection) |
 | **Blend** | 0 % = original drum, 100 % = replacement sample |
 | **Output** | Output level |
@@ -79,7 +79,7 @@ The panel also shows the note count, whether Thruma is listening, and how many s
 | **Save MIDI…** | Saves the notes as a `.mid` file, timed the same way |
 | **Clear** | Removes all notes, the imported audio and MIDI file, and returns to live detection |
 
-**Missing hits?** Hover the rings where the hits should be and follow the reason: *too quiet* → drag the threshold down or raise Sensitivity; *no clear attack* → raise Amount; *sounded like bleed* → lower Match; *too soon* → lower Retrigger in Advanced. Or just click the rings to add those notes. With imported or analysed audio, every change re-analyses the whole song and keeps the notes you added by hand.
+**Missing hits?** Hover the rings where the hits should be and follow the reason: *too quiet* → drag the threshold down or raise Sensitivity; *no clear attack* → raise Amount; *sounded like bleed* → raise Tolerance; *too soon* → lower Retrigger in Advanced. Or just click the rings to add those notes. With imported or analysed audio, every change re-analyses the whole song and keeps the notes you added by hand.
 
 Thruma also learns in the background while the song plays: the level of your real hits and the drum's sound. Detection gets more consistent after the first few seconds.
 

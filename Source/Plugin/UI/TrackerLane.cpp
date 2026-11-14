@@ -242,21 +242,18 @@ void TrackerLane::paint (juce::Graphics& g)
         g.fillEllipse (x - 4.0f, top - 4.0f, 8.0f, 8.0f);
     }
 
-    // candidates ignored as bleed (recent ones): small grey crosses at the bottom of the audio lane
+    // trigger points: possible hits that were not used (dim rings); bright when hovered, click to add as a note
     {
-        const auto& sc = proc.getScope();
-        const auto off = proc.getScopeToTimelineOffset();
-        const auto ev = sc.eventsWritten.load (std::memory_order_acquire);
-        g.setColour (colours::textDim.withAlpha (0.8f));
-        for (int64_t e = std::max<int64_t> (0, ev - DetectionScope::kEvents); e < ev; ++e)
+        const auto& pts = proc.getTriggerPoints();
+        auto it = std::lower_bound (pts.begin(), pts.end(), lo, [] (const ThrumaProcessor::TriggerPoint& a, int64_t v) { return a.position < v; });
+        for (; it != pts.end() && it->position <= hi; ++it)
         {
-            const auto k = (size_t) (e % DetectionScope::kEvents);
-            if (sc.eventVel[k].load (std::memory_order_relaxed) >= 0.0f) continue;
-            const float x = posToX ((double) (sc.eventPos[k].load (std::memory_order_relaxed) + off));
-            if (x < 0.0f || x > (float) getWidth()) continue;
-            const float y = (float) audio.getBottom() - 10.0f;
-            g.drawLine (x - 3.0f, y - 3.0f, x + 3.0f, y + 3.0f, 1.2f);
-            g.drawLine (x - 3.0f, y + 3.0f, x + 3.0f, y - 3.0f, 1.2f);
+            if (hasNoteNear (it->position)) continue;
+            const float x = posToX ((double) it->position), y = pointY (it->peakDb);
+            const bool hot = (int) (it - pts.begin()) == hoverPoint;
+            g.setColour ((hot ? colours::text : colours::textDim).withAlpha (hot ? 1.0f : 0.75f));
+            g.drawEllipse (x - 4.5f, y - 4.5f, 9.0f, 9.0f, hot ? 2.0f : 1.4f);
+            if (hot) g.drawVerticalLine ((int) x, y + 5.0f, (float) audio.getBottom());
         }
     }
 
@@ -285,6 +282,24 @@ void TrackerLane::paint (juce::Graphics& g)
         g.drawVerticalLine ((int) x, (float) audio.getY(), (float) midi.getBottom());
     }
 
+    const auto& pts = proc.getTriggerPoints();
+    if (hoverPoint >= 0 && hoverPoint < (int) pts.size())
+    {
+        const auto& tp = pts[(size_t) hoverPoint];
+        const auto text = "Not used - " + ThrumaProcessor::describe (tp) + ".  Click to add it as a note.";
+        g.setFont (juce::FontOptions (12.0f));
+        const int w = juce::jmin (getWidth() - 12, juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), text) + 16);
+        const float x = posToX ((double) tp.position), y = pointY (tp.peakDb);
+        auto box = juce::Rectangle<int> (juce::jlimit (6, getWidth() - w - 6, (int) x - w / 2), (int) y - 34, w, 22);
+        if (box.getY() < audio.getY() + 2) box.setY ((int) y + 10);
+        g.setColour (colours::background.withAlpha (0.92f));
+        g.fillRoundedRectangle (box.toFloat(), 4.0f);
+        g.setColour (colours::outline);
+        g.drawRoundedRectangle (box.toFloat(), 4.0f, 1.0f);
+        g.setColour (colours::text);
+        g.drawText (text, box.reduced (8, 0), juce::Justification::centredLeft);
+    }
+
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     for (auto [label, y] : { std::pair<const char*, int> { "AUDIO", audio.getY() + 4 }, { "MIDI", midi.getY() + 4 } })
     {
@@ -309,6 +324,49 @@ void TrackerLane::paint (juce::Graphics& g)
     }
     g.setColour (colours::outline);
     g.drawRect (getLocalBounds());
+}
+
+float TrackerLane::pointY (float peakDb) const
+{
+    const auto a = audioArea().toFloat().reduced (0.0f, 8.0f);
+    return juce::jlimit (a.getY(), a.getBottom(), dbToY (peakDb));
+}
+
+bool TrackerLane::hasNoteNear (int64_t pos) const
+{
+    const auto& t = shown();
+    const auto near = (int64_t) (0.004 * juce::jmax (1.0, proc.getCurrentSampleRate()));
+    auto it = std::lower_bound (t.begin(), t.end(), pos - near, [] (const Trigger& a, int64_t v) { return a.position < v; });
+    return it != t.end() && it->position <= pos + near;
+}
+
+int TrackerLane::hitTestPoint (juce::Point<float> p) const
+{
+    if (! audioArea().contains (p.toInt())) return -1;
+    const auto& pts = proc.getTriggerPoints();
+    int best = -1;
+    float bestD = 9.0f;
+    auto it = std::lower_bound (pts.begin(), pts.end(), (int64_t) xToPos (p.x - 10.0f), [] (const ThrumaProcessor::TriggerPoint& a, int64_t v) { return a.position < v; });
+    for (; it != pts.end() && it->position <= (int64_t) xToPos (p.x + 10.0f); ++it)
+    {
+        if (hasNoteNear (it->position)) continue;
+        const float d = p.getDistanceFrom ({ posToX ((double) it->position), pointY (it->peakDb) });
+        if (d < bestD) { bestD = d; best = (int) (it - pts.begin()); }
+    }
+    return best;
+}
+
+void TrackerLane::addPointAsNote (int index)
+{
+    const auto& pts = proc.getTriggerPoints();
+    if (index < 0 || index >= (int) pts.size()) return;
+    TriggerList copy;
+    copy.setAll (proc.getTriggers().getAll());
+    selected = { copy.add (pts[(size_t) index].position, juce::jlimit (0.05f, 1.0f, pts[(size_t) index].velocity)) };
+    proc.commitTriggerEdit (copy.getAll(), "Add note");
+    hoverPoint = -1;
+    if (onMessage) onMessage ("Added the note.");
+    repaint();
 }
 
 int TrackerLane::hitTestBar (juce::Point<float> p, bool& onTop) const
@@ -345,8 +403,11 @@ void TrackerLane::mouseMove (const juce::MouseEvent& e)
     const bool overThr = audioArea().contains (e.getPosition()) && std::abs (e.position.y - dbToY (proc.getCurrentThresholdDb())) < 7.0f;
     const int bar = midiArea().contains (e.getPosition()) ? hitTestBar (e.position, top) : -1;
     hoverThreshold = overThr;
-    setMouseCursor (overThr || (bar >= 0 && top) ? juce::MouseCursor::UpDownResizeCursor
-                                                 : bar >= 0 ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+    const int pt = overThr ? -1 : hitTestPoint (e.position);
+    if (pt != hoverPoint) { hoverPoint = pt; repaint(); }
+    setMouseCursor (pt >= 0 ? juce::MouseCursor::PointingHandCursor
+                    : overThr || (bar >= 0 && top) ? juce::MouseCursor::UpDownResizeCursor
+                    : bar >= 0 ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
 }
 
 void TrackerLane::mouseDown (const juce::MouseEvent& e)
@@ -361,6 +422,11 @@ void TrackerLane::mouseDown (const juce::MouseEvent& e)
         if (onMessage)
             onMessage (why.isNotEmpty() ? why : "Play from " + juce::String ((double) target / juce::jmax (1.0, proc.getCurrentSampleRate()), 1) + " s");
         repaint();
+        return;
+    }
+    if (const int pt = hitTestPoint (e.position); pt >= 0 && std::abs (e.position.y - dbToY (proc.getCurrentThresholdDb())) >= 7.0f)
+    {
+        addPointAsNote (pt);
         return;
     }
     if (audioArea().contains (e.getPosition()) && std::abs (e.position.y - dbToY (proc.getCurrentThresholdDb())) < 7.0f)

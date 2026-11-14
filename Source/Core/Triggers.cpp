@@ -158,7 +158,7 @@ bool TriggerList::deserialise (const uint8_t* data, size_t size)
 std::vector<Trigger> analyseTake (const float* audio, int64_t length, double sampleRate,
                                   const DetectorSettings& settings, float* outVelocityRefDb,
                                   SpectralTemplate* outTemplate, std::vector<float>* outLevel,
-                                  std::vector<float>* outThreshold, int decim)
+                                  std::vector<float>* outThreshold, int decim, std::vector<Rejection>* outRejected)
 {
     TransientDetector det;
     det.prepare (sampleRate);
@@ -197,6 +197,7 @@ std::vector<Trigger> analyseTake (const float* audio, int64_t length, double sam
     det.setSpectralTemplate (tmpl);
     det.reset (0);
     std::vector<Trigger> out;
+    if (outRejected != nullptr) outRejected->clear();
     if (outLevel != nullptr) outLevel->assign ((size_t) (length / decim + 1), -180.0f);
     if (outThreshold != nullptr) outThreshold->assign ((size_t) (length / decim + 1), -180.0f);
     float acc = -180.0f;
@@ -211,6 +212,8 @@ std::vector<Trigger> analyseTake (const float* audio, int64_t length, double sam
             t.ghost = h.ghost;
             out.push_back (t);
         }
+        if (outRejected != nullptr)
+            if (Rejection r; det.takeRejection (r)) outRejected->push_back (r);
         acc = std::max (acc, det.getLevelDb());
         if ((i + 1) % decim == 0)
         {

@@ -31,6 +31,34 @@ void ParamSlider::resized()
 
 void ParamSlider::paint (juce::Graphics&) {}
 
+ParamKnob::ParamKnob (APVTS& state, const juce::String& paramId, const juce::String& label, const juce::String& tooltip)
+{
+    caption.setText (label, juce::dontSendNotification);
+    caption.setColour (juce::Label::textColourId, colours::textDim);
+    caption.setJustificationType (juce::Justification::centred);
+    caption.setFont (juce::FontOptions (13.0f));
+    caption.setTooltip (tooltip);
+    addAndMakeVisible (caption);
+    slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 18);
+    slider.setColour (juce::Slider::rotarySliderFillColourId, colours::accent);
+    slider.setColour (juce::Slider::rotarySliderOutlineColourId, colours::outline);
+    slider.setColour (juce::Slider::thumbColourId, colours::accent);
+    slider.setColour (juce::Slider::textBoxTextColourId, colours::text);
+    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    slider.setTooltip (tooltip);
+    addAndMakeVisible (slider);
+    attachment = std::make_unique<APVTS::SliderAttachment> (state, paramId, slider);
+    slider.setDoubleClickReturnValue (true, (double) state.getParameter (paramId)->convertFrom0to1 (state.getParameter (paramId)->getDefaultValue()));
+}
+
+void ParamKnob::resized()
+{
+    auto r = getLocalBounds();
+    caption.setBounds (r.removeFromTop (18));
+    slider.setBounds (r);
+}
+
 ParamToggle::ParamToggle (APVTS& state, const juce::String& paramId, const juce::String& label, const juce::String& tooltip)
 {
     button.setButtonText (label);

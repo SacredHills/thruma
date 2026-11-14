@@ -42,13 +42,18 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
       velocity (p.apvts, ids::repVelResp, "Velocity", "0 % = every hit at full level, 100 % = follow the played dynamics."),
       blend (p.apvts, ids::repBlend, "Blend", "0 % = original drum, 100 % = replacement sample."),
       output (p.apvts, ids::repOutput, "Output", "Output level."),
-      dragMidi (p)
+      amount (p.apvts, ids::repAmount, "Amount", "How easily a possible hit is noticed. Raise it when quiet or fast hits are missed "
+                                                  "(more dim trigger points appear); lower it if notes appear where nothing was played."),
+      match (p.apvts, ids::repMatch, "Match", "How much a hit has to sound like this drum rather than bleed from the others. "
+                                                "Lower it when real hits are missed as 'bleed'; raise it when bleed becomes notes. 0 % = off."),
+      dragMidi (p),
+      advanced (p.apvts)
 {
     addAndMakeVisible (trackPanel);
     addAndMakeVisible (controlPanel);
     for (juce::Component* c : std::initializer_list<juce::Component*> { &instrument, &sample, &hits, &info, &lane, &sensitivity, &velocity,
                                                                         &blend, &output, &dragMidi, &saveBtn, &clearBtn, &finalizeBtn, &importBtn,
-                                                                        &analyzeBtn, &importMidiBtn, &playBtn })
+                                                                        &analyzeBtn, &importMidiBtn, &playBtn, &amount, &match, &advancedBtn })
         addAndMakeVisible (c);
     trackPanel.toBack();
     controlPanel.toBack();
@@ -111,6 +116,10 @@ ReplacePage::ReplacePage (ThrumaProcessor& p)
     playBtn.setTooltip ("Play / stop. Imported audio plays inside Thruma (click the time ruler to choose where); "
                         "in DAWs that allow it, this runs the DAW's transport.");
     playBtn.onClick = [this] { proc.togglePlay(); timerCallback(); };
+    advancedBtn.setTooltip ("Ghost notes, retrigger time, dynamic range, double hits and frequency focus.");
+    advancedBtn.setClickingTogglesState (true);
+    advancedBtn.onClick = [this] { showAdvanced(); };
+    addChildComponent (advanced);
     startTimerHz (6);
     timerCallback();
 }
@@ -124,7 +133,7 @@ int ReplacePage::currentSlot() const
 void ReplacePage::resized()
 {
     auto r = getLocalBounds().reduced (12);
-    auto bottom = r.removeFromBottom (112);
+    auto bottom = r.removeFromBottom (200);
     r.removeFromBottom (10);
 
     auto left = r.removeFromLeft (190);
@@ -158,8 +167,46 @@ void ReplacePage::resized()
     const int colW = (c.getWidth() - 24) / 2;
     auto col1 = c.removeFromLeft (colW);
     c.removeFromLeft (24);
-    layoutRows (col1, { &sensitivity, &velocity }, 30, 10);
-    layoutRows (c, { &blend, &output }, 30, 10);
+    layoutRows (col1.removeFromTop (70), { &sensitivity, &velocity }, 30, 10);
+    layoutRows (c.removeFromTop (70), { &blend, &output }, 30, 10);
+
+    // Amount and Match: two knobs centred under the Velocity slider's track
+    col1.removeFromTop (8);
+    const int nameW = juce::jmin (130, velocity.getWidth() / 3);
+    const int trackL = velocity.getX() + nameW, trackR = velocity.getRight() - 72;
+    const int knobW = 84, gap = 22, cx = (trackL + trackR) / 2;
+    const int knobsH = juce::jmin (col1.getHeight(), 100);
+    amount.setBounds (cx - gap / 2 - knobW, col1.getY(), knobW, knobsH);
+    match.setBounds (cx + gap / 2, col1.getY(), knobW, knobsH);
+    c.removeFromTop (8);
+    advancedBtn.setBounds (c.getX() + juce::jmin (130, c.getWidth() / 3), c.getY() + 4, 130, 30);
+    const int advW = 430, advH = 5 * 28 + 4 * 6 + 46;
+    advanced.setBounds (juce::jlimit (lane.getX() + 8, lane.getRight() - advW - 8, advancedBtn.getX() - 40),
+                        controlPanel.getY() - advH - 6, advW, advH);
+}
+
+ReplacePage::AdvancedPanel::AdvancedPanel (APVTS& s)
+    : ghost (s, ids::repGhost, "Ghost Notes", "Extends detection to quiet ghost notes (most useful on snare and hats)."),
+      retrig (s, ids::repRetrig, "Retrigger", "Minimum time between hits. 0 = the drum's default. Lower it if fast hits are missed as 'too soon'."),
+      dynRange (s, ids::repDynRange, "Dynamic Range", "Level range mapped onto velocity 1-127."),
+      doubleHits (s, ids::repDouble, "Double hits", "Detect flams, drags and fast doubles while the previous hit still rings."),
+      focus (s, ids::repFocus, "Frequency focus", "Reject hits whose sound does not match the drum (bleed protection). Same as Match 0 % when off.")
+{
+    addAndMakeVisible (bg);
+    for (auto* c : std::initializer_list<juce::Component*> { &ghost, &retrig, &dynRange, &doubleHits, &focus }) addAndMakeVisible (c);
+}
+
+void ReplacePage::AdvancedPanel::resized()
+{
+    bg.setBounds (getLocalBounds());
+    layoutRows (bg.getContentBounds(), { &ghost, &retrig, &dynRange, &doubleHits, &focus }, 28, 6);
+}
+
+void ReplacePage::showAdvanced()
+{
+    advanced.setVisible (advancedBtn.getToggleState());
+    if (advanced.isVisible()) advanced.toFront (false);
+    resized();
 }
 
 void ReplacePage::timerCallback()

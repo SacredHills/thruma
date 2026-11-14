@@ -92,6 +92,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                      AudioParameterFloatAttributes().withLabel ("%")
                                          .withStringFromValueFunction ([] (float v, int) { return String (v, 0) + " %"; })));
     layout.add (std::make_unique<B> (ParameterID { ids::dbAdaptive, 1 }, "Adaptive Learning", true));
+
+    // --- Replace: trigger points (added later: kept at the end so existing automation keeps its order) ---
+    layout.add (pct (ids::repAmount, "Amount", 50.0f));
+    layout.add (pct (ids::repMatch, "Match", 50.0f));
     return layout;
 }
 

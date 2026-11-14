@@ -50,7 +50,7 @@ namespace
             && same (a.blend, b.blend) && same (a.outputDb, b.outputDb) && same (a.alignMs, b.alignMs)
             && same (d.instrument, e.instrument) && same (d.sensitivity, e.sensitivity) && same (d.ghostSensitivity, e.ghostSensitivity)
             && same (d.retriggerMs, e.retriggerMs) && same (d.doubleHits, e.doubleHits) && same (d.frequencyFocus, e.frequencyFocus)
-            && same (d.dynamicRangeDb, e.dynamicRangeDb)
+            && same (d.dynamicRangeDb, e.dynamicRangeDb) && same (d.amount, e.amount) && same (d.match, e.match)
             && same (p.velocityResponse, q.velocityResponse) && same (p.dynamicRangeDb, q.dynamicRangeDb) && same (p.gainDb, q.gainDb)
             && same (p.invertPolarity, q.invertPolarity) && same (p.autoAlign, q.autoAlign) && same (p.startOffset, q.startOffset);
     }
@@ -272,7 +272,51 @@ void ThrumaProcessor::timerCallback()
     }
     linkedId.store (linkedSourceName.isNotEmpty() ? LinkHub::getInstance().findSource (linkedSourceName.toStdString()) : -1);
     drainHitLog();
+    drainTriggerPoints();
     maybeAutoLearn();
+}
+
+juce::String ThrumaProcessor::describe (const TriggerPoint& p)
+{
+    switch (p.reason)
+    {
+        case RejectReason::TooQuiet: return "Too quiet: " + juce::String (p.peakDb, 1) + " dB, threshold " + juce::String (p.thresholdDb, 1)
+                                            + " dB (raise Sensitivity or drag the threshold down)";
+        case RejectReason::NoAttack: return "No clear attack: sounded like the last hit still ringing (raise Amount)";
+        case RejectReason::Bleed:    return "Sounded like bleed from another drum (lower Match)";
+        case RejectReason::TooSoon:  return "Too soon after the previous hit (lower Retrigger in Advanced)";
+        case RejectReason::None:     break;
+    }
+    return {};
+}
+
+void ThrumaProcessor::addTriggerPoint (const TriggerPoint& p)
+{
+    // the same spot heard again (looping, playing the part twice) replaces the older point
+    const auto near = (int64_t) (0.002 * currentRate);
+    auto it = std::lower_bound (triggerPoints.begin(), triggerPoints.end(), p.position - near,
+                                [] (const TriggerPoint& a, int64_t v) { return a.position < v; });
+    if (it != triggerPoints.end() && std::abs (it->position - p.position) <= near) { *it = p; return; }
+    if (triggerPoints.size() >= 20000) return;
+    triggerPoints.insert (it, p);
+}
+
+void ThrumaProcessor::drainTriggerPoints()
+{
+    const bool live = offlineSource == OfflineSource::None && ! isFinalized();
+    if (live)
+    {
+        // new detection settings: points found with the old ones no longer apply
+        const auto key = detectionSettingsKey();
+        if (key != pointsKey) { triggerPoints.clear(); pointsKey = key; }
+    }
+    const int ready = pointFifo.getNumReady();
+    const auto r = pointFifo.read (ready);
+    if (live)
+    {
+        for (int i = 0; i < r.blockSize1; ++i) addTriggerPoint (pointEvents[(size_t) (r.startIndex1 + i)]);
+        for (int i = 0; i < r.blockSize2; ++i) addTriggerPoint (pointEvents[(size_t) (r.startIndex2 + i)]);
+    }
 }
 
 void ThrumaProcessor::drainHitLog()
@@ -390,6 +434,8 @@ void ThrumaProcessor::readParameters (ReplaceSettings& rs, DebleedSettings& ds, 
     rs.detector.retriggerMs = v (ids::repRetrig);
     rs.detector.doubleHits = v (ids::repDouble) > 0.5f;
     rs.detector.frequencyFocus = v (ids::repFocus) > 0.5f;
+    rs.detector.amount = v (ids::repAmount) * 0.01f;
+    rs.detector.match = v (ids::repMatch) * 0.01f;
     rs.detector.dynamicRangeDb = v (ids::repDynRange);
     rs.playback.velocityResponse = v (ids::repVelResp) * 0.01f;
     rs.playback.dynamicRangeDb = v (ids::repDynRange);
@@ -847,6 +893,29 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
             }
         }
         lastScopePoint = written;
+
+        // possible hits that were not used, on the song timeline (only while the song plays, like the notes)
+        const auto evWritten = sc.eventsWritten.load (std::memory_order_acquire);
+        if (rs.source == TriggerSource::Live && engineTimeline >= 0 && playing)
+        {
+            const int64_t engEnd = replace.getInputPosition();
+            for (int64_t e = std::max (lastScopeEvent, evWritten - DetectionScope::kEvents); e < evWritten; ++e)
+            {
+                const auto k = (size_t) (e % DetectionScope::kEvents);
+                const int reason = sc.eventReason[k].load (std::memory_order_relaxed);
+                if (reason == 0) continue;
+                TriggerPoint tp;
+                tp.position = engineTimeline + n - (engEnd - sc.eventPos[k].load (std::memory_order_relaxed));
+                tp.velocity = sc.eventVel[k].load (std::memory_order_relaxed);
+                tp.peakDb = sc.eventPeak[k].load (std::memory_order_relaxed);
+                tp.thresholdDb = sc.eventThr[k].load (std::memory_order_relaxed);
+                tp.reason = (RejectReason) reason;
+                const auto w = pointFifo.write (1);
+                if (w.blockSize1 > 0) pointEvents[(size_t) w.startIndex1] = tp;
+                else if (w.blockSize2 > 0) pointEvents[(size_t) w.startIndex2] = tp;
+            }
+        }
+        lastScopeEvent = evWritten;
     }
 
     // --- sample preview (Samples page) ---
@@ -1046,6 +1115,7 @@ void ThrumaProcessor::clearCapture()
     suspendProcessing (false);
     storedOverview.clear();
     lastLearnLength = 0;
+    triggerPoints.clear();
 }
 
 void ThrumaProcessor::clearAll()
@@ -1272,12 +1342,14 @@ void ThrumaProcessor::dropOfflineAudio()
     offlineName = {};
     analysedKey = {};
     reanalyseAt = 0.0;
+    triggerPoints.clear();
 }
 
 juce::String ThrumaProcessor::detectionSettingsKey() const
 {
     juce::String k;
-    for (auto* id : { ids::instrument, ids::repSens, ids::repGhost, ids::repRetrig, ids::repDouble, ids::repFocus, ids::repDynRange })
+    for (auto* id : { ids::instrument, ids::repSens, ids::repGhost, ids::repRetrig, ids::repDouble, ids::repFocus, ids::repDynRange,
+                      ids::repAmount, ids::repMatch })
         if (auto* v = apvts.getRawParameterValue (id)) k << juce::String (v->load(), 4) << ";";
     return k;
 }
@@ -1302,10 +1374,11 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
         auto thr = std::make_shared<std::vector<float>>();
         float refDb = -150.0f;
         SpectralTemplate tmpl;
+        auto rejected = std::make_shared<std::vector<Rejection>>();
         auto found = std::make_shared<std::vector<Trigger>> (analyseTake (audio->data(), (int64_t) audio->size(), sr, rs.detector,
-                                                                         &refDb, &tmpl, level.get(), thr.get(), kEnvBin));
+                                                                         &refDb, &tmpl, level.get(), thr.get(), kEnvBin, rejected.get()));
         for (auto& t : *found) t.position += origin;
-        juce::MessageManager::callAsync ([weak, audio, origin, level, thr, found, key, name, initial, onDone, refDb, restoreOnly]
+        juce::MessageManager::callAsync ([weak, audio, origin, level, thr, found, key, name, initial, onDone, refDb, restoreOnly, rejected]
         {
             auto* self = weak.get();
             if (self == nullptr) return;
@@ -1313,6 +1386,10 @@ void ThrumaProcessor::runOfflineAnalysis (bool initial, std::function<void (cons
             if (self->offlineAudio != audio) return;   // superseded (cleared or replaced meanwhile)
             self->analysedKey = key;
             if (refDb > -140.0f) self->offlineRefDb = refDb;
+            self->triggerPoints.clear();
+            for (const auto& rj : *rejected)
+                self->triggerPoints.push_back ({ rj.position + origin, rj.velocity, rj.peakDb, rj.thresholdDb, rj.reason });
+            self->pointsKey = key;
 
             auto& cap = self->capture;
             const auto len = (int64_t) audio->size();

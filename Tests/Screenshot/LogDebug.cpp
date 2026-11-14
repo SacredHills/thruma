@@ -223,6 +223,70 @@ int main()
         check (same, "...and pressing play in the DAW keeps it");
     }
 
+    // ---- 3c) trigger points: hits not used come back with a reason (Analyze and live); Amount / Match re-analyse ----
+    {
+        // loud snare-like hits every 0.5 s, and very quiet ones (-40 dB) in between
+        auto hit = [] (int k) { return std::sin ((float) k * 0.09f) * std::exp (-(float) k / 900.0f) + 0.3f * std::sin ((float) k * 0.61f) * std::exp (-(float) k / 200.0f); };
+        auto wavQ = writeWav ("thruma_points.wav", [&] (int i)
+        {
+            const int beat = 24000, k = i % beat;
+            return 0.7f * hit (k) + 0.007f * hit ((i + beat / 2) % beat);
+        }, 48000 * 8, 48000.0);
+        std::vector<int64_t> quietTruth;
+        for (int64_t t = 12000; t < 48000 * 8; t += 24000) quietTruth.push_back (48000 + t);   // import origin = playhead (1 s)
+        std::unique_ptr<ThrumaProcessor> pq (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH phq; phq.playing = false; phq.pos = 48000; pq->setPlayHead (&phq); pq->prepareToPlay (48000.0, 512);
+        juce::String result;
+        pq->importAudio (wavQ, [&] (const juce::String& m) { result = m; });
+        for (int i = 0; i < 100 && result.isEmpty(); ++i) pump (50);
+        const int notes0 = (int) pq->getTriggers().size();
+        int quietPoints = 0;
+        for (auto& tp : pq->getTriggerPoints())
+            for (auto q : quietTruth)
+                if (std::llabs (tp.position - q) < 480 && tp.reason == RejectReason::TooQuiet) { ++quietPoints; break; }
+        const auto firstReason = pq->getTriggerPoints().empty() ? juce::String ("none") : ThrumaProcessor::describe (pq->getTriggerPoints().front());
+        check (notes0 >= 15 && notes0 <= 17, "Analyze: the loud hits become notes (" + juce::String (notes0) + ")");
+        check (quietPoints >= 12, "Analyze: the quiet hits show as 'too quiet' trigger points (" + juce::String (quietPoints) + " of 16): " + firstReason);
+
+        // Match / Amount re-analyse like Sensitivity
+        const int before = pq->getOfflineMessageCount();
+        if (auto* prm = pq->apvts.getParameter (ids::repMatch)) prm->setValueNotifyingHost (0.2f);
+        for (int i = 0; i < 100 && pq->getOfflineMessageCount() == before; ++i) pump (50);
+        check (pq->getOfflineMessageCount() > before, "changing Match re-analyses: " + pq->getOfflineMessage());
+        const int before2 = pq->getOfflineMessageCount();
+        if (auto* prm = pq->apvts.getParameter (ids::repAmount)) prm->setValueNotifyingHost (0.8f);
+        for (int i = 0; i < 100 && pq->getOfflineMessageCount() == before2; ++i) pump (50);
+        check (pq->getOfflineMessageCount() > before2, "changing Amount re-analyses: " + pq->getOfflineMessage());
+        // raising Sensitivity all the way turns most quiet points into notes
+        const int before3 = pq->getOfflineMessageCount();
+        if (auto* prm = pq->apvts.getParameter (ids::repSens)) prm->setValueNotifyingHost (1.0f);
+        if (auto* prm = pq->apvts.getParameter (ids::repGhost)) prm->setValueNotifyingHost (1.0f);
+        for (int i = 0; i < 100 && pq->getOfflineMessageCount() == before3; ++i) pump (50);
+        check ((int) pq->getTriggers().size() >= notes0 + 10, "Sensitivity + Ghost up: the quiet hits become notes (" + juce::String ((int) pq->getTriggers().size()) + ")");
+
+        // live: the same audio played through the DAW
+        std::unique_ptr<ThrumaProcessor> pl (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH phl; phl.playing = true; phl.pos = 0; pl->setPlayHead (&phl); pl->prepareToPlay (48000.0, 512);
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (wavQ));
+        juce::AudioBuffer<float> all (1, (int) rd->lengthInSamples);
+        rd->read (&all, 0, (int) rd->lengthInSamples, 0, true, false);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer midi;
+        for (int p = 0; p + 512 <= all.getNumSamples(); p += 512)
+        {
+            for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, all, 0, p, 512);
+            midi.clear(); phl.pos = p; pl->processBlock (buf, midi);
+            if ((p / 512) % 40 == 0) pump (5);
+        }
+        pump (300);
+        int livePoints = 0;
+        for (auto& tp : pl->getTriggerPoints())
+            for (auto q : quietTruth)
+                if (std::llabs (tp.position - (q - 48000)) < 480) { ++livePoints; break; }
+        check (livePoints >= 10, "live: quiet hits show as trigger points on the song timeline (" + juce::String (livePoints) + " of 16, "
+                                     + juce::String ((int) pl->getTriggerPoints().size()) + " points)");
+    }
+
     // ---- 4) instrument with the main input switched off (Studio One): both channels, sidechain as the drum ----
     {
         std::unique_ptr<ThrumaProcessor> p3 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));

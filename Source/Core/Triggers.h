@@ -69,7 +69,7 @@ std::vector<Trigger> analyseTake (const float* audio, int64_t length, double sam
                                   const DetectorSettings& settings, float* outVelocityRefDb = nullptr,
                                   SpectralTemplate* outTemplate = nullptr,
                                   std::vector<float>* outLevelDb = nullptr, std::vector<float>* outThresholdDb = nullptr,
-                                  int envelopeDecimation = 64);
+                                  int envelopeDecimation = 64, std::vector<Rejection>* outRejected = nullptr);
 
 /** A minimal Standard MIDI File (format 0, channel 10) writer. */
 struct MidiNoteEvent

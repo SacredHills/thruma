@@ -117,7 +117,7 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
         DetectedHit h;
         const bool hit = detector.processSample (mono[(size_t) i], h);
         scope.push (detector.getLevelDb(), detector.getThresholdDb(), detector.getFloorDb());
-        if (int64_t rej; detector.takeRejection (rej)) scope.event (rej, -1.0f);
+        if (Rejection rej; detector.takeRejection (rej)) scope.event (rej.position, rej.velocity, (int) rej.reason, rej.peakDb, rej.thresholdDb);
         if (hit) scope.event (h.position, h.velocity);
         if (hit && settings.enabled && settings.source == TriggerSource::Live)
         {

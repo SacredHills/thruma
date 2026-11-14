@@ -161,6 +161,11 @@ public:
     /** Detection level / threshold history on the host timeline (one value per kEnvBin samples). */
     static constexpr int kEnvBin = DetectionScope::kDecim;
     const std::vector<float>& getEnvelopeLevel() const { return envLevel; }
+
+    /** Possible hits that were not used (dim trigger points on the lane), on the song timeline, sorted. Message thread. */
+    struct TriggerPoint { int64_t position = 0; float velocity = 0, peakDb = -150, thresholdDb = -150; RejectReason reason = RejectReason::None; };
+    const std::vector<TriggerPoint>& getTriggerPoints() const { return triggerPoints; }
+    static juce::String describe (const TriggerPoint& p);
     const std::vector<float>& getEnvelopeThreshold() const { return envThreshold; }
     float getCurrentThresholdDb() const;
     /** Host-timeline position = scope (engine) position + this offset. */
@@ -248,7 +253,15 @@ private:
     std::vector<float> envLevel, envThreshold;
     static constexpr int kBeatBin = 512;
     std::vector<double> beatMap;   // host beat position (quarter notes) per kBeatBin samples of the history; NaN = unknown
-    int64_t lastScopePoint = 0;
+    int64_t lastScopePoint = 0, lastScopeEvent = 0;
+    // possible hits not used: audio thread -> message thread
+    static constexpr int kPointFifo = 512;
+    std::array<TriggerPoint, kPointFifo> pointEvents {};
+    juce::AbstractFifo pointFifo { kPointFifo };
+    std::vector<TriggerPoint> triggerPoints;   // message thread
+    juce::String pointsKey;                    // detection settings the live points were found with
+    void drainTriggerPoints();
+    void addTriggerPoint (const TriggerPoint& p);
     std::atomic<int64_t> scopeOffset { 0 };
     juce::String trackName;
     bool blockHasBeat = false;

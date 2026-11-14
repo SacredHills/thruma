@@ -25,6 +25,20 @@ private:
     std::unique_ptr<APVTS::SliderAttachment> attachment;
 };
 
+/** Rotary knob with a caption above and the value below, bound to a parameter. */
+class ParamKnob : public juce::Component
+{
+public:
+    ParamKnob (APVTS& state, const juce::String& paramId, const juce::String& label, const juce::String& tooltip = {});
+    void resized() override;
+    juce::Slider& getSlider() { return slider; }
+
+private:
+    juce::Label caption;
+    juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
+    std::unique_ptr<APVTS::SliderAttachment> attachment;
+};
+
 class ParamToggle : public juce::Component
 {
 public:

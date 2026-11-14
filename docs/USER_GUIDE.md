@@ -23,7 +23,7 @@ The Replace page works like a tracker. It has a track lane and a few controls.
 ### The track lane
 - **AUDIO lane:** the drum's level as the song plays (teal).
   - The dashed amber line is the **threshold**. **Drag it up or down.** Hits that rise above it become notes; bleed that stays under it is ignored.
-  - Grey **×** marks show moments that crossed the threshold but were ignored because they didn't sound like this drum (bleed from the kick, hats, cymbals and so on).
+  - **Trigger points:** dim **rings** are possible hits Thruma noticed but didn't use. **Hover one** to see why: *too quiet* (under the threshold), *no clear attack* (sounded like the last hit still ringing), *sounded like bleed* from another drum, or *too soon* after the previous hit. Each reason tells you which control to turn. **Click a ring** to add it as a note.
 - **MIDI lane:** every detected hit, as a note with its velocity.
 
 Editing in the MIDI lane:
@@ -65,6 +65,9 @@ The panel also shows the note count, whether Thruma is listening, and how many s
 |---|---|
 | **Sensitivity** | The same as dragging the threshold. Higher catches quieter hits; lower ignores more bleed. At 0 % only hits close to your loudest ones count |
 | **Velocity** | 0 % = every hit at full level, 100 % = follow the played dynamics |
+| **Amount** (knob) | How easily a possible hit is noticed at all. Raise it when quiet or fast hits are missed (more rings appear); lower it if notes appear where nothing was played |
+| **Match** (knob) | How much a hit must sound like this drum rather than bleed from the others. Lower it when real hits show as *sounded like bleed*; raise it when bleed turns into notes. 0 % switches the check off |
+| **Advanced…** | Ghost Notes (quiet ghost notes), Retrigger (minimum time between hits, 0 = the drum's default; lower it for hits marked *too soon*), Dynamic Range (level range mapped onto velocity), Double hits (flams, drags, fast doubles), Frequency focus (bleed protection) |
 | **Blend** | 0 % = original drum, 100 % = replacement sample |
 | **Output** | Output level |
 | **Analyze** | Tracks the whole song at once (see above) |
@@ -75,6 +78,8 @@ The panel also shows the note count, whether Thruma is listening, and how many s
 | **Drag MIDI** | Drag this into your DAW to drop the notes as a MIDI clip. Notes are placed on your DAW's own beat grid (tempo changes included), measured from the song start, so drop the clip at bar 1 to line it up |
 | **Save MIDI…** | Saves the notes as a `.mid` file, timed the same way |
 | **Clear** | Removes all notes, the imported audio and MIDI file, and returns to live detection |
+
+**Missing hits?** Hover the rings where the hits should be and follow the reason: *too quiet* → drag the threshold down or raise Sensitivity; *no clear attack* → raise Amount; *sounded like bleed* → lower Match; *too soon* → lower Retrigger in Advanced. Or just click the rings to add those notes. With imported or analysed audio, every change re-analyses the whole song and keeps the notes you added by hand.
 
 Thruma also learns in the background while the song plays: the level of your real hits and the drum's sound. Detection gets more consistent after the first few seconds.
 

@@ -19,7 +19,9 @@ struct DetectionScope
     std::atomic<int64_t> pointsWritten { 0 };          // point i covers engine samples [i*kDecim, (i+1)*kDecim)
 
     std::array<std::atomic<int64_t>, kEvents> eventPos {};
-    std::array<std::atomic<float>, kEvents> eventVel {};   // >= 0 accepted hit (velocity), < 0 rejected candidate
+    std::array<std::atomic<float>, kEvents> eventVel {};   // velocity (0..1)
+    std::array<std::atomic<int>, kEvents> eventReason {};  // 0 = accepted hit, else RejectReason of a possible hit not used
+    std::array<std::atomic<float>, kEvents> eventPeak {}, eventThr {};   // level and threshold (dB) of a rejected one
     std::atomic<int64_t> eventsWritten { 0 };
     std::atomic<float> referenceDb { -150.0f };
 
@@ -49,12 +51,15 @@ struct DetectionScope
         accCount = 0;
     }
 
-    void event (int64_t position, float velocity) noexcept
+    void event (int64_t position, float velocity, int reason = 0, float peakDb = 0.0f, float thrDb = 0.0f) noexcept
     {
         const auto i = eventsWritten.load (std::memory_order_relaxed);
         const auto k = (size_t) (i % kEvents);
         eventPos[k].store (position, std::memory_order_relaxed);
         eventVel[k].store (velocity, std::memory_order_relaxed);
+        eventReason[k].store (reason, std::memory_order_relaxed);
+        eventPeak[k].store (peakDb, std::memory_order_relaxed);
+        eventThr[k].store (thrDb, std::memory_order_relaxed);
         eventsWritten.store (i + 1, std::memory_order_release);
     }
 };

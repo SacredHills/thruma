@@ -31,6 +31,20 @@ struct DetectorSettings
     bool  frequencyFocus    = true;   // reject hits whose energy is mostly outside the body band
     float dynamicRangeDb    = 40.0f;  // level range mapped to velocity 0..1
     float maxReportDelayMs  = 10.0f;  // hard upper bound on report delay (lookahead budget)
+    float amount            = 0.5f;   // 0..1 how easily a possible hit is noticed (attack rise needed); 0.5 = neutral
+    float match             = 0.5f;   // 0..1 how much it must sound like this drum rather than bleed; 0.5 = neutral
+};
+
+/** Why a possible hit was not used (shown as a dim trigger point). */
+enum class RejectReason : uint8_t { None = 0, TooQuiet = 1, NoAttack = 2, Bleed = 3, TooSoon = 4 };
+
+struct Rejection
+{
+    int64_t position = 0;
+    float   peakDb = -150.0f;
+    float   thresholdDb = -150.0f;
+    float   velocity = 0.0f;
+    RejectReason reason = RejectReason::None;
 };
 
 /** Coarse spectral fingerprint of the target drum (band levels relative to the loudest band). */
@@ -84,8 +98,8 @@ public:
     float getLevelDb() const noexcept { return lastBodyDb; }      // body-band envelope (what is compared to the threshold)
     float getThresholdDb() const noexcept { return thresholdNow(); }
     float getFloorDb() const noexcept { return bodyFloorDb; }
-    /** True once after a candidate was rejected; its start position is returned. */
-    bool takeRejection (int64_t& where) noexcept { if (rejectedPos < 0) return false; where = rejectedPos; rejectedPos = -1; return true; }
+    /** True once after a possible hit near the threshold was not used (with the reason). */
+    bool takeRejection (Rejection& r) noexcept { if (! hasRejection) return false; r = rejection; hasRejection = false; return true; }
 
     template <typename OnHit>
     void process (const float* x, int n, OnHit&& onHit) noexcept
@@ -156,7 +170,11 @@ private:
     float maxAtkSoFar = -150.0f, maxPeakSoFar = -150.0f;     // adaptive level of the attack band at real hits
     float bodySmoothDb = -180.0f, smoothCoeff = 0.99f;
     float lastBodyDb = -180.0f;
-    int64_t rejectedPos = -1;
+    Rejection rejection;
+    bool hasRejection = false;
+    int64_t tooSoonReportedFor = -1;   // onset of the hit whose retrigger window already reported a TooSoon
+    float trigFloorMarginDb = 8;
+    bool matchOff = false;
     std::array<float, SpectralTemplate::kBands> lastHitShape {};
     bool lastHitShapeValid = false;
     float lastHitAtkDb = -150.0f;

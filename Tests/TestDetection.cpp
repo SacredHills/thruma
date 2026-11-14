@@ -267,3 +267,47 @@ TEST_CASE ("Detection: fast playing - snare rolls and fast double bass with hi-h
         CHECK (sc.meanAbsErrMs <= c.maxMeanErrMs);
     }
 }
+
+TEST_CASE ("Detection: Amount and Match controls, rejected hits report a reason")
+{
+    const auto& s = session48();
+    auto runWith = [&] (float amount, float match, float sens = 0.5f)
+    {
+        DetectorSettings ds;
+        ds.instrument = Instrument::Snare;
+        ds.amount = amount; ds.match = match; ds.sensitivity = sens;
+        return sig::scoreOnsets (positions (detect (s.mics[sig::Snare], s.sr, ds)), truthOf (s, sig::Snare, true), s.sr);
+    };
+    const auto base = runWith (0.5f, 0.5f), moreAmount = runWith (1.0f, 0.5f), lessAmount = runWith (0.0f, 0.5f);
+    const auto looseMatch = runWith (0.5f, 0.0f), strictMatch = runWith (0.5f, 1.0f);
+    printScore ("default", base);
+    printScore ("Amount 100%", moreAmount);
+    printScore ("Amount 0%", lessAmount);
+    printScore ("Match 0%", looseMatch);
+    printScore ("Match 100%", strictMatch);
+    CHECK (moreAmount.truePos + moreAmount.falsePos >= base.truePos + base.falsePos);
+    CHECK (lessAmount.truePos + lessAmount.falsePos <= base.truePos + base.falsePos);
+    CHECK (looseMatch.truePos >= base.truePos);
+    CHECK (strictMatch.falsePos <= base.falsePos);
+    CHECK (strictMatch.truePos <= base.truePos);
+
+    // with Sensitivity at 0 (Amount up, so quiet hits are still noticed) some real hits fall under the threshold;
+    // they come back as "too quiet" trigger points near the true positions
+    DetectorSettings ds;
+    ds.instrument = Instrument::Snare;
+    ds.sensitivity = 0.0f;
+    ds.amount = 1.0f;
+    std::vector<Rejection> rej;
+    const auto hits = analyseTake (s.mics[sig::Snare].data(), (int64_t) s.mics[sig::Snare].size(), s.sr, ds, nullptr, nullptr, nullptr, nullptr, 64, &rej);
+    std::vector<int64_t> quiet;
+    for (auto& r : rej) if (r.reason == RejectReason::TooQuiet) quiet.push_back (r.position);
+    const auto truth = truthOf (s, sig::Snare, true);
+    std::vector<int64_t> found;
+    for (auto& h : hits) found.push_back (h.position);
+    const auto missedByThreshold = sig::scoreOnsets (found, truth, s.sr).missed;
+    const auto recovered = sig::scoreOnsets (quiet, truth, s.sr).truePos;
+    std::printf ("    sensitivity 0: %d hits under the threshold, %d of them shown as 'too quiet' points (%d rejected total)\n",
+                 missedByThreshold, recovered, (int) rej.size());
+    CHECK (missedByThreshold > 0);
+    CHECK (recovered >= missedByThreshold * 6 / 10);
+}

@@ -65,6 +65,40 @@ juce::Font ThrumaLookAndFeel::getPopupMenuFont()
     return juce::Font (juce::FontOptions (14.0f));
 }
 
+void ThrumaLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider& s)
+{
+    const auto bounds = juce::Rectangle<int> (x, y, w, h).toFloat().reduced (3.0f);
+    const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    const auto c = bounds.getCentre();
+    const float angle = a0 + pos * (a1 - a0);
+    const bool hot = s.isMouseOverOrDragging();
+
+    // body
+    g.setColour (colours::panelRaised);
+    g.fillEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f).withCentre (c).reduced (radius * 0.22f));
+    g.setColour (colours::outline);
+    g.drawEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f).withCentre (c).reduced (radius * 0.22f), 1.0f);
+
+    // track and value arc
+    const float arcR = radius - 2.0f, thick = juce::jmax (2.0f, radius * 0.1f);
+    juce::Path track;
+    track.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, a0, a1, true);
+    g.setColour (colours::outline);
+    g.strokePath (track, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    juce::Path value;
+    const bool bipolar = s.getMinimum() < 0.0 && s.getMaximum() > 0.0;   // pan: the arc grows from the centre
+    const float from = bipolar ? a0 + (float) ((0.0 - s.getMinimum()) / (s.getMaximum() - s.getMinimum())) * (a1 - a0) : a0;
+    value.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, juce::jmin (from, angle), juce::jmax (from, angle), true);
+    g.setColour (colours::accent.withAlpha (hot ? 1.0f : 0.9f));
+    g.strokePath (value, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // pointer
+    const float inner = radius * 0.25f, outer = radius * 0.7f;
+    const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
+    g.setColour (colours::text);
+    g.drawLine ({ c + dir * inner, c + dir * outer }, juce::jmax (2.0f, radius * 0.09f));
+}
+
 void ThrumaLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float sliderPos, float, float,
                                           juce::Slider::SliderStyle style, juce::Slider& s)
 {

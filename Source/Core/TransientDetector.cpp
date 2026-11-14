@@ -135,15 +135,23 @@ void TransientDetector::updateDerived() noexcept
     atkEnv.setWindow (holdAtk);
     posEnv.setWindow (posHold);
 
-    riseThrDb     = lerp (14.0f, 4.0f, s);
-    riseFastDb    = lerp (9.0f, 3.0f, s);    // right after real hits (fast playing) a smaller fresh attack suffices
+    // Amount shifts how easily a possible hit is noticed, Match how drum-like it must sound; both neutral at 50 %.
+    // Sensitivity is the master (threshold line, and how strict the other checks are); Amount and Match shift
+    // those other checks from there.
+    const float sA = std::clamp (s + (std::clamp (settings.amount, 0.0f, 1.0f) - 0.5f) * 0.8f, 0.0f, 0.95f);
+    const float sM = std::clamp (s - (std::clamp (settings.match, 0.0f, 1.0f) - 0.5f) * 0.8f, 0.0f, 1.2f);
+    matchOff = settings.match < 0.03f;   // 0 %: every possible hit above the threshold counts
+
+    riseThrDb     = lerp (14.0f, 4.0f, sA);
+    riseFastDb    = lerp (9.0f, 3.0f, sA);    // right after real hits (fast playing) a smaller fresh attack suffices
     fastWindow    = msToSamples (160.0, sr);
-    mainRiseMinDb = lerp (3.0f, 2.0f, s);
+    mainRiseMinDb = lerp (3.0f, 2.0f, sA);
     floorMarginDb = lerp (12.0f, 4.0f, s);
+    trigFloorMarginDb = lerp (12.0f, 4.0f, sA);
     relRangeDb    = std::max (6.0f, p.levelRangeDb + (s - 0.4f) * 50.0f);   // Sensitivity 0 % -> threshold just below the loudest hits
     ghostRelDb    = settings.ghostSensitivity * 18.0f * p.ghostWeight;
-    focusMinDb    = p.focusMinDb - s * 6.0f;
-    specThrDb     = lerp (2.0f, 6.0f, s);
+    focusMinDb    = p.focusMinDb - sM * 6.0f;
+    specThrDb     = lerp (2.0f, 6.0f, sM);
 
     refDecayPerSample = (float) (0.05 / sr);  // adaptive reference falls very slowly (breaks must not lower it)
     smoothCoeff = onePoleCoeff (0.010 * sr);
@@ -191,6 +199,8 @@ void TransientDetector::reset (int64_t startPosition) noexcept
     bodySmoothDb = -180.0f;
     lastHitShapeValid = false;
     lastHitAtkDb = -150.0f;
+    hasRejection = false;
+    tooSoonReportedFor = -1;
 }
 
 float TransientDetector::velocityFor (float peakDb) const noexcept
@@ -255,13 +265,21 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
     if (state == State::Idle)
     {
         const bool timeOk = (pos - lastOnset) >= retrig && pos >= cooldownUntil;
+        if (! timeOk && pos >= cooldownUntil && tooSoonReportedFor != lastOnset && (pos - lastOnset) > velWindow
+            && atkRise >= riseThrDb + 3.0f && atkDb >= atkFloorDb + trigFloorMarginDb && bodyDb >= thresholdNow())
+        {
+            // a clear fresh attack inside the retrigger window of the last hit: report it once
+            tooSoonReportedFor = lastOnset;
+            rejection = { pos, bodyDb, thresholdNow(), velocityFor (bodyDb), RejectReason::TooSoon };
+            hasRejection = true;
+        }
         if (timeOk)
         {
             // fast playing: a re-hit on a still-ringing drum shows a smaller fresh rise. Once the drum has decayed
             // (re-armed) the normal rise is required again, so noise in a decaying tail cannot start a candidate.
             const float riseThrDb = (! rearmed && (pos - lastOnset) < fastWindow) ? riseFastDb : this->riseThrDb;
-            const bool trigA = atkRise >= riseThrDb && atkDb >= atkFloorDb + floorMarginDb;
-            const bool trigB = bodyRise >= riseThrDb + 3.0f && bodyDb >= bodyFloorDb + floorMarginDb;
+            const bool trigA = atkRise >= riseThrDb && atkDb >= atkFloorDb + trigFloorMarginDb;
+            const bool trigB = bodyRise >= riseThrDb + 3.0f && bodyDb >= bodyFloorDb + trigFloorMarginDb;
             const bool rearmOk = rearmed
                               || (settings.doubleHits && (atkRise >= riseThrDb || bodyRise >= riseThrDb + 3.0f));
             if ((trigA || trigB) && rearmOk)
@@ -341,7 +359,7 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             const bool riseOk = bodyRiseOk
                              || (atkRise >= 0.6f * riseThrDb && peakDb >= lastHitPeakDb - 10.0f && atkPeakDb >= atkRefDb - atkRefMargin
                                  && atkPeakDb >= lastHitAtkDb - 8.0f);
-            const bool focusOk = ! settings.frequencyFocus || (peakDb - fullDb) >= focusMinDb;
+            const bool focusOk = matchOff || ! settings.frequencyFocus || (peakDb - fullDb) >= focusMinDb;
 
             // spectral fingerprint of this candidate
             // (band levels relative to their mean, each band floored 40 dB below the loudest)
@@ -360,7 +378,7 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
             const bool confident = peakDb >= refDb - 6.0f;
             bool shapeOk = true;
             float dist = 0.0f;
-            if (! confident && settings.frequencyFocus && tmpl.isValid())
+            if (! confident && ! matchOff && settings.frequencyFocus && tmpl.isValid())
             {
                 dist = shapeDistance (shape, tmpl);
                 // the quieter the candidate (closer to the bleed level), the closer it must sound like the drum
@@ -457,7 +475,13 @@ bool TransientDetector::processSample (float x, DetectedHit& hit) noexcept
                     && peakDb >= bodyFloorDb + floorMarginDb + 6.0f && peakDb >= -90.0f)
                     refDb = std::max (peakDb, refDb - std::min (6.0f, 0.5f * (absThr - peakDb) + 1.5f));
                 cooldownUntil = pos + velWindow / 2;
-                if (levelOk) rejectedPos = candStart;   // loud enough but not drum-like: show it on the scope
+                // near misses become dim trigger points (with the reason), so they can be checked and added
+                if (peakDb >= absThr - 18.0f && peakDb >= bodyFloorDb + floorMarginDb * 0.5f)
+                {
+                    const auto why = ! levelOk ? RejectReason::TooQuiet : ! riseOk ? RejectReason::NoAttack : RejectReason::Bleed;
+                    rejection = { candStart, peakDb, absThr, velocityFor (peakDb), why };
+                    hasRejection = true;
+                }
             }
         }
     }

@@ -40,7 +40,19 @@ private:
     juce::Label hits, info;
     TrackerLane lane;
     ParamSlider sensitivity, velocity, blend, output;
+    ParamKnob amount, match;
+    juce::TextButton advancedBtn { "Advanced..." };
+    void showAdvanced();
+    struct AdvancedPanel : public juce::Component
+    {
+        explicit AdvancedPanel (APVTS& s);
+        void resized() override;
+        Panel bg { "Advanced" };
+        ParamSlider ghost, retrig, dynRange;
+        ParamToggle doubleHits, focus;
+    };
     MidiDragSource dragMidi;
+    AdvancedPanel advanced;
     juce::TextButton saveBtn { "Save MIDI..." }, clearBtn { "Clear" }, finalizeBtn { "Finalize" }, importBtn { "Import Audio..." },
                      analyzeBtn { "Analyze" }, importMidiBtn { "Import MIDI..." }, playBtn { "Play" };
     void importFile (const juce::File& f);

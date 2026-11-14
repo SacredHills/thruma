@@ -1,5 +1,6 @@
 // Dev tool: runs the plugin's processor on a synthetic drum session with a moving transport and
 // writes PNG snapshots of the editor pages. Usage: ThrumaScreenshot <out-dir>
+#include "../../Source/Plugin/UI/TrackerLane.h"
 #include "../../Source/Plugin/PluginProcessor.h"
 #include "../TestSignals.h"
 #include <thread>
@@ -79,7 +80,60 @@ int main (int argc, char** argv)
             midi.clear();
             proc->processBlock (buf, midi);
             std::this_thread::sleep_for (std::chrono::microseconds (900));
-            if (p == (s.length * 6 / 10) / 256 * 256) { juce::Thread::sleep (300); snap ("REPLACE", "replace_live.png"); }
+            if (p == (s.length * 6 / 10) / 256 * 256)
+            {
+                juce::Thread::sleep (300);
+                snap ("REPLACE", "replace_live.png");
+                // hover the first visible trigger point, then open Advanced
+                juce::MessageManager::callAsync ([&]
+                {
+                    std::function<juce::Component* (juce::Component*)> findLane = [&] (juce::Component* c) -> juce::Component*
+                    {
+                        if (dynamic_cast<thruma::ui::TrackerLane*> (c) != nullptr) return c;
+                        for (auto* k : c->getChildren()) if (auto* f = findLane (k)) return f;
+                        return nullptr;
+                    };
+                    if (auto* lane = dynamic_cast<thruma::ui::TrackerLane*> (findLane (ed.get())))
+                        for (auto& tp2 : tp->getTriggerPoints())
+                        {
+                            const float x = lane->posToX ((double) tp2.position);
+                            if (x < 40.0f || x > (float) lane->getWidth() - 40.0f) continue;
+                            const juce::Point<float> at (x, lane->pointY (tp2.peakDb));
+                            auto src = juce::Desktop::getInstance().getMainMouseSource();
+                            lane->mouseMove (juce::MouseEvent (src, at, {}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, lane, lane, juce::Time::getCurrentTime(), at,
+                                                               juce::Time::getCurrentTime(), 0, false));
+                            break;
+                        }
+                });
+                snap ({}, "replace_hover.png");
+                juce::MessageManager::callAsync ([&]
+                {
+                    std::function<void (juce::Component*)> click = [&] (juce::Component* c)
+                    {
+                        if (auto* b = dynamic_cast<juce::TextButton*> (c); b != nullptr && b->getButtonText() == "Advanced...")
+                        {
+                            b->setToggleState (true, juce::dontSendNotification);
+                            b->onClick();
+                            return;
+                        }
+                        for (auto* k : c->getChildren()) click (k);
+                    };
+                    click (ed.get());
+                });
+                juce::Thread::sleep (400);
+                snap ({}, "replace_advanced.png");
+                juce::MessageManager::callAsync ([&]
+                {
+                    std::function<void (juce::Component*)> close = [&] (juce::Component* c)
+                    {
+                        if (auto* b = dynamic_cast<juce::TextButton*> (c); b != nullptr && b->getButtonText() == "Advanced...")
+                        { b->setToggleState (false, juce::dontSendNotification); b->onClick(); return; }
+                        for (auto* k : c->getChildren()) close (k);
+                    };
+                    close (ed.get());
+                });
+                juce::Thread::sleep (300);
+            }
             if (p == (s.length * 7 / 10) / 256 * 256) { tp->auditionSlot (thruma::kNumInstruments, 0.9f); tp->auditionSlot ((int) thruma::Instrument::Kick, 0.9f); snap ("PLAYER", "player.png"); }
             if (p == (s.length * 8 / 10) / 256 * 256) { snap ("SAMPLES", "samples.png"); }
             if (p == (s.length * 85 / 100) / 256 * 256)

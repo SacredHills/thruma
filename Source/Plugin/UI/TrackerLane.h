@@ -23,6 +23,7 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override { if (hoverPoint >= 0 || hoverThreshold) { hoverPoint = -1; hoverThreshold = false; repaint(); } }
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     bool keyPressed (const juce::KeyPress&) override;
 
@@ -36,6 +37,7 @@ public:
 
     double xToPos (float x) const { return viewStart + (double) x * spp; }
     float posToX (double pos) const { return (float) ((pos - viewStart) / spp); }
+    float pointY (float peakDb) const;   // where a trigger point of this level is drawn
 
 private:
     void timerCallback() override;
@@ -71,6 +73,12 @@ private:
     double dragStartPos = 0.0;
     juce::Rectangle<float> rubber;
     bool hoverThreshold = false;
+
+    // trigger points: possible hits that were not used (dim dots) - hover explains why, click adds the note
+    int hoverPoint = -1;
+    int hitTestPoint (juce::Point<float> p) const;
+    bool hasNoteNear (int64_t pos) const;
+    void addPointAsNote (int index);
 };
 
 } // namespace thruma::ui

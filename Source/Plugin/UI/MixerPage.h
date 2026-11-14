@@ -25,6 +25,11 @@ private:
     juce::Slider pan { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     juce::Slider fader { juce::Slider::LinearVertical, juce::Slider::NoTextBox };
     juce::TextButton mute { "M" }, solo { "S" };
+    juce::Label panValue, dbValue;   // click to type
+    juce::ComboBox output;
+public:
+    void refreshOutputs();   // the host may have turned extra outputs on / off
+private:
     float meter = 0.0f, hitGlow = 0.0f;
     bool hasSamples = false;
 };

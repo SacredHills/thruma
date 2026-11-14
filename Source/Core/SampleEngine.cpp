@@ -174,7 +174,7 @@ void SampleEngine::triggerSample (const SampleData* s, int domain, uint64_t seq,
     v->active = true;
 }
 
-void SampleEngine::render (float* const* out, int numChannels, int n) noexcept
+void SampleEngine::render (float* const* outMain, int numChannelsMain, int n, const AuxTargets* aux) noexcept
 {
     std::array<float, kNumKitSlots> peaks {};
     const bool anySolo = mixer != nullptr && mixer->anySolo.load (std::memory_order_relaxed);
@@ -199,6 +199,15 @@ void SampleEngine::render (float* const* out, int numChannels, int n) noexcept
         // for mono ones, 0 dB in the centre); ramped over the block so moves never click
         float tL = 1.0f, tR = 1.0f;
         const bool mixed = mixer != nullptr && v.domain == 0 && v.instrument >= 0 && v.instrument < kNumKitSlots;
+        // where it plays: the main output, or the extra output its drum / pad is routed to (if that one is on)
+        float* const* out = outMain;
+        int numChannels = numChannelsMain;
+        if (mixed && aux != nullptr)
+            if (const int o = mixer->slots[(size_t) v.instrument].output.load (std::memory_order_relaxed); o > 0 && o <= AuxTargets::kMax && aux->numCh[o - 1] > 0)
+            {
+                out = aux->ch[o - 1];
+                numChannels = aux->numCh[o - 1];
+            }
         if (mixed)
         {
             const auto& m = mixer->slots[(size_t) v.instrument];

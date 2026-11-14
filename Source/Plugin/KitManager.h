@@ -31,6 +31,7 @@ public:
         float volumeDb = 0.0f;      // mixer
         float pan = 0.0f;           // -1 .. +1
         bool mute = false, solo = false;
+        int output = 0;             // 0 = main, k = extra output k ("Out k+1")
         bool isEmpty() const { for (auto& l : layers) if (! l.files.isEmpty()) return false; return true; }
     };
 
@@ -48,6 +49,7 @@ public:
     int findFreeMidiNote() const;
     /** Mixer settings only (volume / pan / mute / solo); no kit rebuild needed. */
     void setMix (int slot, float volumeDb, float pan, bool mute, bool solo);
+    void setOutput (int slot, int output);
     juce::String getKitName() const;
     void setKitName (const juce::String& n);
 
@@ -81,6 +83,15 @@ public:
     std::unique_ptr<Kit> buildKit (double playbackRate, juce::StringArray* missing = nullptr);
 
     static bool isAudioFile (const juce::File& f);
+
+    // --- TDE: one drum (all its velocity layers and round-robin samples) in one file ---
+    static bool isTdeFile (const juce::File& f) { return f.hasFileExtension ("tde"); }
+    /** Folder where loaded .tde files are unpacked (Documents/Thruma/TDE). */
+    static juce::File getTdeLibraryFolder();
+    /** Save a drum / pad: its sample files (copied as they are), velocity ranges and round-robin mode. */
+    bool saveSlotTde (int slot, const juce::File& dest, juce::String& error);
+    /** Load a .tde onto a drum / pad (keeps its MIDI note and mixer settings). */
+    bool loadSlotTde (int slot, const juce::File& tde, juce::String& error);
 
     // --- progress of a long load (any thread) ---
     enum class LoadPhase : int { None = 0, Samples = 1, Kit = 2 };

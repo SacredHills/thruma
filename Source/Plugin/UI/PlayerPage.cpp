@@ -365,6 +365,8 @@ juce::PopupMenu PlayerPage::buildMenu (int slot, std::vector<juce::File>& fileId
     menu.addItem (1, "Load samples...");
     menu.addItem (2, "Add samples...", ! m.isEmpty());
     menu.addItem (3, "Load folder...");
+    menu.addItem (8, "Load TDE...");
+    menu.addItem (9, "Save as TDE...", ! m.isEmpty());
     menu.addSeparator();
     {
         // MIDI note: General MIDI drum notes, the current one ticked; one used by another drum or pad is swapped
@@ -434,6 +436,8 @@ void PlayerPage::showBuiltMenu (juce::PopupMenu& menu, int slot, std::vector<juc
             }), true);
         }
         else if (r == 7) { kitm.clearSlot (slot); self.kitEdited(); }
+        else if (r == 8) self.chooseTde (slot, false);
+        else if (r == 9) self.chooseTde (slot, true);
         else if (r >= 1000 && r <= 1127) self.setMidiNote (slot, r - 1000);
         else if (r == 999)
         {
@@ -448,6 +452,38 @@ void PlayerPage::showBuiltMenu (juce::PopupMenu& menu, int slot, std::vector<juc
         }
         else if (r >= 100 && r - 100 < (int) fileIds.size()) self.proc.previewSample (fileIds[(size_t) (r - 100)]);
     });
+}
+
+void PlayerPage::chooseTde (int slot, bool save)
+{
+    auto& km = proc.getKitManager();
+    juce::Component::SafePointer<PlayerPage> safe (this);
+    const auto base = KitManager::getTdeLibraryFolder().getParentDirectory();
+    if (save)
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Save " + km.getSlotName (slot) + " as TDE", base.getChildFile (km.getSlotName (slot) + ".tde"), "*.tde");
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting, [safe, slot] (const juce::FileChooser& fc)
+        {
+            if (safe == nullptr || fc.getResult() == juce::File()) return;
+            juce::String err;
+            const auto f = fc.getResult().withFileExtension ("tde");
+            f.getParentDirectory().createDirectory();
+            if (! safe->proc.getKitManager().saveSlotTde (slot, f, err))
+                juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("Save TDE").withMessage (err).withButton ("OK"), nullptr);
+        });
+        return;
+    }
+    chooser = std::make_unique<juce::FileChooser> ("Load TDE for " + km.getSlotName (slot), base, "*.tde");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe, slot] (const juce::FileChooser& fc)
+    {
+        if (safe != nullptr && fc.getResult() != juce::File()) safe->loadTde (slot, fc.getResult());
+    });
+}
+
+void PlayerPage::loadTde (int slot, const juce::File& f)
+{
+    juce::Component::SafePointer<PlayerPage> safe (this);
+    proc.runKitJob ([slot, f] (KitManager& km) { juce::String err; km.loadSlotTde (slot, f, err); }, [safe] { if (safe != nullptr) safe->kitLoaded(); });
 }
 
 void PlayerPage::setMidiNote (int slot, int note)
@@ -556,6 +592,7 @@ void PlayerPage::filesDropped (const juce::StringArray& paths, int x, int y)
             }
             for (const auto& entry : juce::RangedDirectoryIterator (f, true, "*.wav;*.wave;*.aif;*.aiff;*.flac")) files.add (entry.getFile());
         }
+        else if (KitManager::isTdeFile (f) && slot >= 0) { loadTde (slot, f); return; }
         else if (KitManager::isAudioFile (f)) files.add (f);
     }
     if (slot >= 0) assign (slot, files, false);

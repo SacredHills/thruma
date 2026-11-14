@@ -86,10 +86,16 @@ namespace
 
 //==============================================================================
 ThrumaProcessor::ThrumaProcessor()
-    : AudioProcessor (BusesProperties()
-                          .withInput ("Input", juce::AudioChannelSet::stereo(), true)
-                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                          .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false)),
+    : AudioProcessor ([]
+      {
+          auto b = BusesProperties()
+                       .withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Main", juce::AudioChannelSet::stereo(), true)
+                       .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false);
+          // extra outputs (off until the host turns them on): drums / pads routed on the MIXER page
+          for (int k = 0; k < AuxTargets::kMax; ++k) b = b.withOutput ("Out " + juce::String (k + 2), juce::AudioChannelSet::stereo(), false);
+          return b;
+      }()),
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
     for (auto* id : { ids::dbOn, ids::dbReference, ids::repLatency, ids::instrument })
@@ -125,6 +131,11 @@ bool ThrumaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     {
         const auto sc = layouts.getChannelSet (true, 1);
         if (! sc.isDisabled() && sc != juce::AudioChannelSet::mono() && sc != juce::AudioChannelSet::stereo()) return false;
+    }
+    for (int k = 1; k < layouts.outputBuses.size(); ++k)
+    {
+        const auto o = layouts.getChannelSet (false, k);
+        if (! o.isDisabled() && o != juce::AudioChannelSet::mono() && o != juce::AudioChannelSet::stereo()) return false;
     }
     return true;
 }
@@ -725,6 +736,21 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
         }
         midiSeqPublisher.reportOldestInUse (sqH->seq);
     }
+    // extra outputs for this chunk. Input and output channels share the host's buffer, so an extra output may
+    // still hold side-chain audio here: clear it before the samples go in.
+    AuxTargets aux;
+    for (int k = 0; k < AuxTargets::kMax && k + 1 < getBusCount (false); ++k)
+    {
+        auto* bus = getBus (false, k + 1);
+        if (bus == nullptr || ! bus->isEnabled()) continue;
+        auto b = getBusBuffer (buffer, false, k + 1);
+        aux.numCh[k] = juce::jmin (2, b.getNumChannels());
+        for (int c = 0; c < aux.numCh[k]; ++c)
+        {
+            aux.ch[k][c] = b.getWritePointer (c, start);
+            juce::FloatVectorOperations::clear (aux.ch[k][c], n);
+        }
+    }
     replace.process (ch, nch, n, engineTimeline, kit, kitSeq, snap, midiTriggers.data(), numMidi,
                      [&] (const ReplaceHitInfo& h)
                      {
@@ -737,7 +763,7 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
                          const int vel = velocityToMidi (h.velocity);
                          pendingNotes[(size_t) numPending++] = { h.outputOffset, note, vel, true };
                          pendingNotes[(size_t) numPending++] = { h.outputOffset + noteLen, note, 0, false };
-                     });
+                     }, &aux);
 
     // --- live hit log for the editor ---
     // A timeline span is reported once all of its hits are known (detection delay D has passed), together with
@@ -833,7 +859,7 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
         play (rd.startIndex1, rd.blockSize1);
         play (rd.startIndex2, rd.blockSize2);
     }
-    previewEngine.render (ch, nch, n);
+    previewEngine.render (ch, nch, n, &aux);
 
     {
         float pk = 0.0f;
@@ -929,6 +955,7 @@ void ThrumaProcessor::syncMixer (bool userChange)
         s.pan.store (m.pan);
         s.mute.store (m.mute);
         s.solo.store (m.solo);
+        s.output.store (m.output);
         anySolo = anySolo || m.solo;
     }
     mixer.anySolo.store (anySolo);

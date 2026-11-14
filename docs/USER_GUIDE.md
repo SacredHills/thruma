@@ -119,8 +119,8 @@ The display shows the current reduction per frequency band.
 The kit as a picture, like a drum sampler.
 
 - **Click a drum** to play it: harder towards the middle, softer at the edge (**Shift** = soft).
-- **Right-click a drum** to load samples, add samples, load a whole folder, change its **MIDI note** (General MIDI list, or any note; a drum already on that note swaps with it), open its layers on the SAMPLES page, track it on REPLACE, or clear it. The submenu lists its samples; click one to hear it.
-- **Drop audio files** (or a folder) on a drum to load them into it. Drop a folder anywhere else to import it as a whole kit.
+- **Right-click a drum** to load samples, add samples, load a whole folder, change its **MIDI note** (General MIDI list, or any note; a drum already on that note swaps with it), open its layers on the SAMPLES page, track it on REPLACE, **Load TDE… / Save as TDE…**, or clear it. The submenu lists its samples; click one to hear it.
+- **Drop audio files** (or a folder, or a `.tde` file) on a drum to load them into it. Drop a folder anywhere else to import it as a whole kit.
 - **Loading:** samples load in the background with a progress bar; the window stays responsive.
 - **Drums light up** (white) when they are hit: by tracking, MIDI clips, an imported MIDI file or your clicks.
 - **Two crashes:** the left one is **Crash** (MIDI 49), the right one **Crash 2** (MIDI 57). Kit folders with files named "Crash 2" / "Crash_B" / "Right Crash" load onto Crash 2.
@@ -130,6 +130,17 @@ The kit as a picture, like a drum sampler.
 
 A channel strip for every drum and pad: **volume** fader (−inf to +12 dB), **pan** knob, **M**ute, **S**olo and a level meter. Double-click a fader or knob to reset it; **Reset Mixer** resets everything. Changes apply instantly, also to cymbals that are still ringing, and are saved with the kit (and the project).
 
+- **Type a value:** click the pan number under the knob and type `L30`, `R15`, `C`, or a number from −100 (left) to 100 (right). Click the dB number under the fader and type a level such as `-6` (or `-inf`).
+- **Strip order** follows the kit: Crash 2 sits right after Crash.
+
+### Outputs (multi-out)
+
+Thruma is a multi-output instrument: besides **Main** it has 16 extra stereo outputs, **Out 2 … Out 17**. Pick an output in the box under each strip's Mute/Solo to send that drum or pad there, so you can put kick, snare, toms, overheads etc. on separate DAW mixer channels with their own plugins.
+
+- Turn the outputs on in your DAW first (in Studio One: the instrument's output list in the Instrument panel / Mix view; in Reaper: the plugin's I/O pins; in Cubase: Activate Outputs). Until an output is on, the box shows "(off in DAW)" and that drum keeps playing on **Main**, so you never lose a sound.
+- Volume, pan, mute and solo still apply to drums on extra outputs. Blend and the original audio stay on Main.
+- The output choice is saved with the kit and the project.
+
 ## SAMPLES
 
 - **Which sample played:** when the selected drum is hit, the sample file that played lights up (with its velocity), and the drum's row flashes in the kit list.
@@ -137,6 +148,7 @@ A channel strip for every drum and pad: **volume** fader (−inf to +12 dB), **p
 - **Import Folder…:** assigns every WAV in a folder to instruments by name (kick, snare, tom/floor, hat, crash, ride, china, splash); other sounds become pads.
 - **Kit list:** select an instrument or pad to edit it. Double-click a pad's name above its layers to rename it.
 - **Layers:** each row is a velocity layer (velocity range 1–127) with its round-robin samples. Drop files on a row to add them to that layer. Shift-click a sample to remove it. **Round robin / Random** sets how the samples alternate. **MIDI note** is the note used for MIDI.
+- **Save TDE… / Load TDE…** (above the layers): a `.tde` file holds **one drum** – all its samples, velocity layers and round robin – in a single file, like a Drumagog GOG file. Save your snare as `My Snare.tde`, then load it onto any drum in any project or share it; the file carries the WAVs themselves, so it works on another computer. Loading replaces that drum's layers but keeps its MIDI note and mixer settings. You can also drop a `.tde` onto the layers. Loaded TDE samples are unpacked once to `Documents/Thruma/TDE`.
 - **Load Kit… / Save Kit… / New Kit:** kits are `.thrumakit` files that point to your original WAV files. Samples are never copied or changed.
 
 ---

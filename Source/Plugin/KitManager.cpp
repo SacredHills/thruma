@@ -38,6 +38,12 @@ void KitManager::setMix (int i, float volumeDb, float pan, bool mute, bool solo)
     s.solo = solo;
 }
 
+void KitManager::setOutput (int i, int output)
+{
+    std::lock_guard<std::recursive_mutex> l (mutex);
+    if (i >= 0 && i < kNumKitSlots) slots[(size_t) i].output = juce::jmax (0, output);
+}
+
 int KitManager::getNumUsedPads() const
 {
     std::lock_guard<std::recursive_mutex> l (mutex);
@@ -297,6 +303,7 @@ juce::var KitManager::toVar() const
         o->setProperty ("pan", s.pan);
         if (s.mute) o->setProperty ("mute", true);
         if (s.solo) o->setProperty ("solo", true);
+        if (s.output > 0) o->setProperty ("output", s.output);
         o->setProperty ("roundRobin", s.rrMode == RoundRobinMode::Cycle ? "cycle" : "random");
         juce::Array<juce::var> layers;
         for (auto& L : s.layers)
@@ -346,6 +353,7 @@ void KitManager::fromVar (const juce::var& v)
             s.pan = juce::jlimit (-1.0f, 1.0f, (float) (double) iv.getProperty ("pan", 0.0));
             s.mute = (bool) iv.getProperty ("mute", false);
             s.solo = (bool) iv.getProperty ("solo", false);
+            s.output = juce::jmax (0, (int) iv.getProperty ("output", 0));
             s.rrMode = iv.getProperty ("roundRobin", "cycle").toString() == "random" ? RoundRobinMode::Random : RoundRobinMode::Cycle;
             if (auto* layers = iv.getProperty ("layers", {}).getArray())
             {
@@ -361,6 +369,102 @@ void KitManager::fromVar (const juce::var& v)
             }
         }
     }
+}
+
+juce::File KitManager::getTdeLibraryFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Thruma").getChildFile ("TDE");
+}
+
+bool KitManager::saveSlotTde (int slot, const juce::File& dest, juce::String& error)
+{
+    const auto m = getSlot (slot);
+    if (m.isEmpty()) { error = "This drum has no samples to save."; return false; }
+    juce::ZipFile::Builder zip;
+    auto* root = new juce::DynamicObject();
+    root->setProperty ("format", "thruma-tde");
+    root->setProperty ("version", 1);
+    root->setProperty ("name", isPadSlot (slot) ? getSlotName (slot) : dest.getFileNameWithoutExtension());
+    root->setProperty ("drum", slot < kNumInstruments ? juce::String (getInstrumentName ((Instrument) slot)) : juce::String ("Pad"));
+    root->setProperty ("roundRobin", m.rrMode == RoundRobinMode::Random ? "random" : "cycle");
+    juce::Array<juce::var> layers;
+    int n = 0;
+    for (size_t l = 0; l < m.layers.size(); ++l)
+    {
+        auto* lo = new juce::DynamicObject();
+        lo->setProperty ("velLo", m.layers[l].velLo);
+        lo->setProperty ("velHi", m.layers[l].velHi);
+        juce::Array<juce::var> files;
+        for (auto& f : m.layers[l].files)
+        {
+            if (! f.existsAsFile()) { error = "Missing sample: " + f.getFullPathName(); return false; }
+            const auto stored = "samples/" + juce::String (++n).paddedLeft ('0', 3) + "_" + f.getFileName();
+            zip.addFile (f, 6, stored);   // the original file, unchanged
+            files.add (stored);
+        }
+        lo->setProperty ("files", files);
+        layers.add (juce::var (lo));
+    }
+    root->setProperty ("layers", layers);
+    const auto json = juce::JSON::toString (juce::var (root), false);
+    zip.addEntry (new juce::MemoryInputStream (json.toRawUTF8(), json.getNumBytesAsUTF8(), true), 6, "thruma-tde.json", juce::Time::getCurrentTime());
+
+    auto out = dest.withFileExtension ("tde");
+    juce::TemporaryFile tmp (out);
+    {
+        juce::FileOutputStream os (tmp.getFile());
+        if (! os.openedOk() || ! zip.writeToStream (os, nullptr)) { error = "Could not write " + out.getFileName(); return false; }
+    }
+    if (! tmp.overwriteTargetFileWithTemporary()) { error = "Could not write " + out.getFileName(); return false; }
+    return true;
+}
+
+bool KitManager::loadSlotTde (int slot, const juce::File& tde, juce::String& error)
+{
+    juce::ZipFile zip (tde);
+    const int idx = zip.getIndexOfFileName ("thruma-tde.json");
+    if (idx < 0) { error = tde.getFileName() + " is not a TDE file."; return false; }
+    juce::String json;
+    if (std::unique_ptr<juce::InputStream> in { zip.createStreamForEntry (idx) }) json = in->readEntireStreamAsString();
+    const auto v = juce::JSON::parse (json);
+    if (v.getProperty ("format", "").toString() != "thruma-tde") { error = tde.getFileName() + " is not a TDE file."; return false; }
+
+    // unpack once into the library (same file again: reuse it)
+    const auto id = juce::String::toHexString ((juce::int64) (json.hashCode64() ^ tde.getSize()));
+    const auto folder = getTdeLibraryFolder().getChildFile (juce::File::createLegalFileName (tde.getFileNameWithoutExtension()) + "_" + id);
+    if (! folder.getChildFile ("thruma-tde.json").existsAsFile())
+    {
+        folder.createDirectory();
+        if (zip.uncompressTo (folder, true).failed()) { error = "Could not unpack " + tde.getFileName(); return false; }
+    }
+
+    std::vector<LayerModel> layers;
+    juce::Array<juce::File> all;
+    if (auto* ls = v.getProperty ("layers", {}).getArray())
+        for (auto& lv : *ls)
+        {
+            LayerModel lm;
+            lm.velLo = (float) (double) lv.getProperty ("velLo", 0.0);
+            lm.velHi = (float) (double) lv.getProperty ("velHi", 1.0);
+            if (auto* fs = lv.getProperty ("files", {}).getArray())
+                for (auto& fv : *fs)
+                {
+                    const auto f = folder.getChildFile (fv.toString());
+                    if (f.existsAsFile()) { lm.files.add (f); all.add (f); }
+                }
+            if (! lm.files.isEmpty()) layers.push_back (lm);
+        }
+    if (layers.empty()) { error = tde.getFileName() + " has no samples."; return false; }
+    if (getProgressPhase() != LoadPhase::None) setProgressTotal (all.size());
+    for (auto& f : all) loadSample (f);   // decode now (counts on the loading bar), outside the lock
+
+    std::lock_guard<std::recursive_mutex> l (mutex);
+    givePadANote (slot);
+    auto& s = slots[(size_t) slot];
+    s.layers = layers;   // exactly the saved velocity ranges
+    s.rrMode = v.getProperty ("roundRobin", "cycle").toString() == "random" ? RoundRobinMode::Random : RoundRobinMode::Cycle;
+    if (isPadSlot (slot) && s.name.isEmpty()) s.name = v.getProperty ("name", tde.getFileNameWithoutExtension()).toString();
+    return true;
 }
 
 bool KitManager::saveKitFile (const juce::File& f) const

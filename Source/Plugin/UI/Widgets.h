@@ -49,6 +49,7 @@ private:
     juce::Label caption;
     juce::ComboBox combo;
     std::unique_ptr<APVTS::ComboBoxAttachment> attachment;
+    std::unique_ptr<juce::ParameterAttachment> ordered;   // drum lists: shown in display order (item id = choice + 1)
 };
 
 /** Rounded panel with an optional title. */

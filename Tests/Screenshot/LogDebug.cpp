@@ -688,6 +688,88 @@ int main()
         check (worstMs < 40.0, "the editor never waits on the loading (worst " + juce::String (worstMs, 1) + " ms)");
     }
 
+    // ---- 5g) TDE files, extra outputs, display order ----
+    {
+        juce::File d = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("thruma_tde");
+        d.deleteRecursively(); d.createDirectory();
+        auto mk = [&] (const juce::String& name, float amp)
+        {
+            juce::File f = d.getChildFile (name + ".wav");
+            juce::AudioBuffer<float> b (1, 4000);
+            for (int i = 0; i < 4000; ++i) b.setSample (0, i, amp * std::sin ((float) i * 0.11f) * std::exp (-(float) i / 900.0f));
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (f), 48000.0, 1, 24, {}, 0));
+            w->writeFromAudioSampleBuffer (b, 0, 4000);
+            return f;
+        };
+        std::unique_ptr<ThrumaProcessor> pt (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+        PH pht; pt->setPlayHead (&pht);
+        auto& km = pt->getKitManager();
+        KitManager::SlotModel sm;
+        KitManager::LayerModel soft, hard;
+        soft.velLo = 0.0f; soft.velHi = 0.37f; soft.files = { mk ("Snare_soft_1", 0.2f), mk ("Snare_soft_2", 0.21f) };
+        hard.velLo = 0.38f; hard.velHi = 1.0f; hard.files = { mk ("Snare_hard_1", 0.8f), mk ("Snare_hard_2", 0.81f), mk ("Snare_hard_3", 0.82f) };
+        sm.layers = { soft, hard }; sm.rrMode = RoundRobinMode::Random; sm.midiNote = 38;
+        km.setSlot ((int) Instrument::Snare, sm);
+        juce::String err;
+        const auto tde = d.getChildFile ("My Snare.tde");
+        check (km.saveSlotTde ((int) Instrument::Snare, tde, err) && tde.existsAsFile(), "snare saved as one TDE file (" + juce::String (tde.getSize() / 1024) + " KB) " + err);
+        km.loadSlotTde ((int) Instrument::Tom1, tde, err);
+        const auto t1 = km.getSlot ((int) Instrument::Tom1);
+        bool same = t1.layers.size() == 2 && t1.rrMode == RoundRobinMode::Random && t1.midiNote == 48
+                    && std::abs (t1.layers[0].velHi - 0.37f) < 1.0e-4f && std::abs (t1.layers[1].velLo - 0.38f) < 1.0e-4f
+                    && t1.layers[0].files.size() == 2 && t1.layers[1].files.size() == 3;
+        if (same)
+            for (int i = 0; i < 3; ++i)
+            {
+                juce::MemoryBlock a, b;
+                hard.files[i].loadFileAsData (a); t1.layers[1].files[i].loadFileAsData (b);
+                same = same && a == b && t1.layers[1].files[i].isAChildOf (KitManager::getTdeLibraryFolder());
+            }
+        check (same, "TDE loads onto another drum with the same velocity layers, round robin and identical samples (keeps that drum's MIDI note)");
+        const auto firstFolder = t1.layers[0].files[0].getParentDirectory();
+        km.loadSlotTde ((int) Instrument::Tom2, tde, err);
+        check (km.getSlot ((int) Instrument::Tom2).layers[0].files[0].getParentDirectory() == firstFolder, "loading the same TDE again reuses its unpacked samples");
+        juce::File bad = d.getChildFile ("not.tde"); bad.replaceWithText ("hello");
+        check (! km.loadSlotTde ((int) Instrument::Tom3, bad, err) && err.isNotEmpty(), "a broken TDE is refused with a message: " + err);
+
+        // extra outputs: route the snare to Out 2
+        auto layout = pt->getBusesLayout();
+        layout.outputBuses.getReference (1) = juce::AudioChannelSet::stereo();
+        layout.inputBuses.getReference (1) = juce::AudioChannelSet::stereo();   // side-chain on too (shares channels with Out 2)
+        check (pt->setBusesLayout (layout), "host can turn on Thruma's extra outputs");
+        pt->prepareToPlay (48000.0, 512);
+        pt->rebuildKit(); pump (100);
+        const int total = pt->getTotalNumOutputChannels();
+        juce::AudioBuffer<float> buf (juce::jmax (total, pt->getTotalNumInputChannels()), 512); juce::MidiBuffer midi;
+        auto hit = [&] (std::vector<float>& peaks, bool sidechainNoise)
+        {
+            peaks.assign ((size_t) buf.getNumChannels(), 0.0f);
+            pt->auditionSlot ((int) Instrument::Snare, 1.0f);
+            for (int blk = 0; blk < 10; ++blk)
+            {
+                buf.clear(); midi.clear();
+                if (sidechainNoise) for (int c = 2; c < 4; ++c) for (int i = 0; i < 512; ++i) buf.setSample (c, i, 0.5f * std::sin ((float) i * 0.3f));
+                pt->processBlock (buf, midi);
+                for (int c = 0; c < buf.getNumChannels(); ++c) peaks[(size_t) c] = std::max (peaks[(size_t) c], buf.getMagnitude (c, 0, 512));
+            }
+            for (int blk = 0; blk < 10; ++blk) { buf.clear(); midi.clear(); pt->processBlock (buf, midi); }
+        };
+        std::vector<float> pk;
+        hit (pk, true);
+        check (pk[0] > 0.3f && pk[2] < 1.0e-6f, "snare on Main: Out 2 silent, even with side-chain audio in the shared channels (" + juce::String (pk[2], 6) + ")");
+        km.setOutput ((int) Instrument::Snare, 1); pt->syncMixer();
+        hit (pk, true);
+        check (pk[0] < 1.0e-6f && pk[2] > 0.3f && std::abs (pk[2] - pk[3]) < 0.01f, "snare routed to Out 2: plays only there, in stereo (Out 2 "
+               + juce::String (pk[2], 2) + ", main " + juce::String (pk[0], 4) + ")");
+        km.setOutput ((int) Instrument::Snare, 5); pt->syncMixer();   // Out 6 is switched off in the host
+        hit (pk, false);
+        check (pk[0] > 0.3f, "routed to an output the host has off: it plays on Main instead");
+
+        check (slotForRow (7) == (int) Instrument::Crash && slotForRow (8) == (int) Instrument::Crash2 && rowForSlot ((int) Instrument::Ride) == 9,
+               "lists show Crash 2 right after Crash");
+    }
+
     // ---- 6) stopped host: the playhead stays put ----
     {
         std::unique_ptr<ThrumaProcessor> p5 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));

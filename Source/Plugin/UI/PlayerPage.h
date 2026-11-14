@@ -49,6 +49,8 @@ private:
     void chooseFiles (int slot, bool add, bool folder);
     void assign (int slot, const juce::Array<juce::File>& files, bool add);
     void setMidiNote (int slot, int note);
+    void chooseTde (int slot, bool save);
+    void loadTde (int slot, const juce::File& f);
     void kitEdited();     // a quick model edit: refresh, rebuild the audio kit in the background
     void kitLoaded();     // after a background load: refresh
     juce::String describe (int slot) const;

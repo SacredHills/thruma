@@ -17,6 +17,7 @@ void ReplaceEngine::prepare (double sampleRate, int maxBlockSize, int numChannel
         dryDelay[(size_t) c].prepare (lookahead + 1);
         wet[(size_t) c].assign ((size_t) maxBlock, 0.0f);
     }
+    for (auto& a : auxWet) for (auto& c : a) c.assign ((size_t) maxBlock, 0.0f);
     mono.assign ((size_t) maxBlock, 0.0f);
     prepared = true;
     setSettings (settings);

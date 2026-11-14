@@ -35,6 +35,14 @@ struct HitMonitor
     std::array<Slot, kNumKitSlots> slots;
 };
 
+/** The plugin's extra outputs for this block: voices of a slot routed to output k go to ch[k-1]. */
+struct AuxTargets
+{
+    static constexpr int kMax = 16;
+    float* ch[kMax][2] {};
+    int numCh[kMax] {};     // 0 = that output is switched off (the voice then plays on the main output)
+};
+
 /** Per kit slot volume / pan / mute / solo (written by the UI, read by the audio thread), and a level meter. */
 struct SlotMixer
 {
@@ -43,6 +51,7 @@ struct SlotMixer
         std::atomic<float> gain { 1.0f };     // linear
         std::atomic<float> pan { 0.0f };      // -1 left .. +1 right
         std::atomic<bool>  mute { false }, solo { false };
+        std::atomic<int>   output { 0 };      // 0 = main output, k = extra output k (Out k+1)
         std::atomic<float> meter { 0.0f };    // peak since the UI last read it (exchange 0)
     };
     std::array<Slot, kNumKitSlots> slots;
@@ -67,8 +76,9 @@ public:
     /** Play a sample directly (preview). */
     void triggerSample (const SampleData* s, int domain, uint64_t seq, float gain, int startDelay, int instrumentTag = -1) noexcept;
 
-    /** Adds output into out[ch][0..n). numChannels 1 or 2. */
-    void render (float* const* out, int numChannels, int n) noexcept;
+    /** Adds output into out[ch][0..n). numChannels 1 or 2. Kit voices routed to an extra output (SlotMixer)
+        go to aux instead, when that output is on. */
+    void render (float* const* out, int numChannels, int n, const AuxTargets* aux = nullptr) noexcept;
 
     /** Fade out all voices (optionally only those with instrumentTag == tag). */
     void releaseAll (int instrumentTag = -2) noexcept;

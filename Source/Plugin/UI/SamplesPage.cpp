@@ -243,7 +243,7 @@ SamplesPage::SamplesPage (ThrumaProcessor& p) : proc (p)
     instrumentList.setRowHeight (30);
     instrumentList.setColour (juce::ListBox::backgroundColourId, colours::panel);
     addAndMakeVisible (instrumentList);
-    instrumentList.selectRow (selectedInstrument);
+    instrumentList.selectRow (rowForSlot (selectedInstrument));
 
     addAndMakeVisible (detailPanel);
     detailTitle.setFont (juce::FontOptions (17.0f, juce::Font::bold));
@@ -278,6 +278,36 @@ SamplesPage::SamplesPage (ThrumaProcessor& p) : proc (p)
     clearInstBtn.onClick = [this] { proc.getKitManager().clearSlot (selectedInstrument); kitChanged(); };
     addAndMakeVisible (autoVelBtn);
     addAndMakeVisible (clearInstBtn);
+    saveTdeBtn.setTooltip ("Save this drum - all its samples, velocity layers and round robin - as one .tde file.");
+    loadTdeBtn.setTooltip ("Load a .tde file onto this drum (you can also drop one here).");
+    saveTdeBtn.onClick = [this]
+    {
+        const int slot = selectedInstrument;
+        juce::Component::SafePointer<SamplesPage> safe (this);
+        chooser = std::make_unique<juce::FileChooser> ("Save " + proc.getKitManager().getSlotName (slot) + " as TDE",
+                                                       KitManager::getTdeLibraryFolder().getParentDirectory().getChildFile (proc.getKitManager().getSlotName (slot) + ".tde"), "*.tde");
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting, [safe, slot] (const juce::FileChooser& fc)
+        {
+            if (safe == nullptr || fc.getResult() == juce::File()) return;
+            juce::String err;
+            const auto f = fc.getResult().withFileExtension ("tde");
+            f.getParentDirectory().createDirectory();
+            const bool ok = safe->proc.getKitManager().saveSlotTde (slot, f, err);
+            safe->hint.setText (ok ? "Saved " + f.getFileName() : err, juce::dontSendNotification);
+        });
+    };
+    loadTdeBtn.onClick = [this]
+    {
+        const int slot = selectedInstrument;
+        juce::Component::SafePointer<SamplesPage> safe (this);
+        chooser = std::make_unique<juce::FileChooser> ("Load TDE for " + proc.getKitManager().getSlotName (slot), KitManager::getTdeLibraryFolder().getParentDirectory(), "*.tde");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe, slot] (const juce::FileChooser& fc)
+        {
+            if (safe != nullptr && fc.getResult() != juce::File()) safe->loadTde (slot, fc.getResult());
+        });
+    };
+    addAndMakeVisible (saveTdeBtn);
+    addAndMakeVisible (loadTdeBtn);
 
     layerViewport.setViewedComponent (&layerHolder, false);
     layerViewport.setScrollBarsShown (true, false);
@@ -312,7 +342,7 @@ void SamplesPage::selectSlot (int slot)
 {
     selectedInstrument = juce::jlimit (0, kNumKitSlots - 1, slot);
     instrumentList.updateContent();
-    instrumentList.selectRow (selectedInstrument);
+    instrumentList.selectRow (rowForSlot (selectedInstrument));
     refreshDetail();
 }
 
@@ -379,10 +409,16 @@ void SamplesPage::resized()
     detailPanel.setBounds (r);
     auto d = r.reduced (14, 12);
     auto top = d.removeFromTop (30);
-    detailTitle.setBounds (top.removeFromLeft (150));
-    clearInstBtn.setBounds (top.removeFromRight (64));
+    // Buttons first so they always get their width; the title takes what is left.
+    clearInstBtn.setBounds (top.removeFromRight (60));
     top.removeFromRight (6);
-    autoVelBtn.setBounds (top.removeFromRight (110));
+    autoVelBtn.setBounds (top.removeFromRight (104));
+    top.removeFromRight (6);
+    loadTdeBtn.setBounds (top.removeFromRight (88));
+    top.removeFromRight (6);
+    saveTdeBtn.setBounds (top.removeFromRight (88));
+    top.removeFromRight (8);
+    detailTitle.setBounds (top);
     d.removeFromTop (8);
     auto second = d.removeFromTop (28);
     midiLabel.setBounds (second.removeFromLeft (70));
@@ -405,8 +441,9 @@ void SamplesPage::resized()
     layerHolder.setSize (w, juce::jmax (y, layerViewport.getHeight()));
 }
 
-void SamplesPage::paintListBoxItem (int row, juce::Graphics& g, int w, int h, bool selected)
+void SamplesPage::paintListBoxItem (int listRow, juce::Graphics& g, int w, int h, bool selected)
 {
+    const int row = slotForRow (listRow);   // the kit slot shown on this list row
     const auto slot = proc.getKitManager().getSlot (row);
     int files = 0;
     for (auto& l : slot.layers) files += l.files.size();
@@ -438,7 +475,7 @@ void SamplesPage::paintListBoxItem (int row, juce::Graphics& g, int w, int h, bo
 void SamplesPage::selectedRowsChanged (int last)
 {
     if (last < 0) return;
-    selectedInstrument = last;
+    selectedInstrument = slotForRow (last);
     refreshDetail();
 }
 
@@ -485,9 +522,22 @@ void SamplesPage::filesDropped (const juce::StringArray& files, int, int)
             proc.runKitJob ([file] (KitManager& km) { km.importFolder (file); }, [safe] { if (safe != nullptr) safe->refreshNow(); });
             continue;
         }
+        if (KitManager::isTdeFile (file)) { loadTde (selectedInstrument, file); return; }
         if (KitManager::isAudioFile (file)) fs.add (file);
     }
     if (! fs.isEmpty()) addFiles (fs);
+}
+
+void SamplesPage::loadTde (int slot, const juce::File& f)
+{
+    auto err = std::make_shared<juce::String>();
+    juce::Component::SafePointer<SamplesPage> safe (this);
+    proc.runKitJob ([slot, f, err] (KitManager& km) { km.loadSlotTde (slot, f, *err); }, [safe, f, err]
+    {
+        if (safe == nullptr) return;
+        safe->hint.setText (err->isEmpty() ? "Loaded " + f.getFileName() : *err, juce::dontSendNotification);
+        safe->refreshNow();
+    });
 }
 
 void SamplesPage::kitChanged()

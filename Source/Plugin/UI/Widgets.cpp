@@ -1,4 +1,6 @@
 #include "Widgets.h"
+#include "../Parameters.h"
+#include "Instruments.h"
 
 namespace thruma::ui
 {
@@ -43,11 +45,27 @@ ParamCombo::ParamCombo (APVTS& state, const juce::String& paramId, const juce::S
     caption.setColour (juce::Label::textColourId, colours::textDim);
     caption.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     addAndMakeVisible (caption);
-    if (auto* p = dynamic_cast<juce::AudioParameterChoice*> (state.getParameter (paramId)))
-        combo.addItemList (p->choices, 1);
     combo.setTooltip (tooltip);
     addAndMakeVisible (combo);
-    attachment = std::make_unique<APVTS::ComboBoxAttachment> (state, paramId, combo);
+    auto* p = dynamic_cast<juce::AudioParameterChoice*> (state.getParameter (paramId));
+    // drum lists keep their stored numbers but show Crash 2 next to Crash
+    const bool drums = p != nullptr && (paramId == ids::instrument || paramId == ids::repSample);
+    if (! drums)
+    {
+        if (p != nullptr) combo.addItemList (p->choices, 1);
+        attachment = std::make_unique<APVTS::ComboBoxAttachment> (state, paramId, combo);
+        return;
+    }
+    const int first = paramId == ids::repSample ? 1 : 0;   // "Same as instrument" stays on top
+    for (int i = 0; i < first; ++i) combo.addItem (p->choices[i], i + 1);
+    for (int r = 0; r < kNumInstruments && first + r < p->choices.size(); ++r)
+    {
+        const int choice = first + slotForRow (r);
+        combo.addItem (p->choices[choice], choice + 1);
+    }
+    ordered = std::make_unique<juce::ParameterAttachment> (*p, [this] (float v) { combo.setSelectedId (juce::roundToInt (v) + 1, juce::dontSendNotification); });
+    combo.onChange = [this] { if (combo.getSelectedId() > 0) ordered->setValueAsCompleteGesture ((float) (combo.getSelectedId() - 1)); };
+    ordered->sendInitialUpdate();
 }
 
 void ParamCombo::resized()

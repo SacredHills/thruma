@@ -73,7 +73,7 @@ public:
     template <typename OnHit>
     void process (float* const* io, int numCh, int n, int64_t timelinePos,
                   const Kit* kit, uint64_t kitSeq, const TriggerSnapshot* triggers,
-                  const MidiTrigger* midi, int numMidi, OnHit&& onHit) noexcept;
+                  const MidiTrigger* midi, int numMidi, OnHit&& onHit, const AuxTargets* auxOut = nullptr) noexcept;
 
 private:
     void scheduleHit (const Kit* kit, uint64_t kitSeq, int slot, float velocity, int offset) noexcept;
@@ -85,6 +85,7 @@ private:
     SampleEngine samples;
     std::array<DelayLine, kMaxChannels> dryDelay;
     std::array<std::vector<float>, kMaxChannels> wet;
+    std::array<std::array<std::vector<float>, 2>, AuxTargets::kMax> auxWet;   // samples routed to extra outputs
     std::vector<float> mono;
     float dryGainCur = 0.0f, wetGainCur = 1.0f, outGainCur = 1.0f;
     int64_t inPos = 0;
@@ -96,7 +97,7 @@ private:
 template <typename OnHit>
 void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelinePos,
                              const Kit* kit, uint64_t kitSeq, const TriggerSnapshot* triggers,
-                             const MidiTrigger* midi, int numMidi, OnHit&& onHit) noexcept
+                             const MidiTrigger* midi, int numMidi, OnHit&& onHit, const AuxTargets* auxOut) noexcept
 {
     if (! prepared) return;
     numCh = std::clamp (numCh, 1, channels);
@@ -153,7 +154,19 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
     // 4) render and mix
     float* wetPtrs[kMaxChannels] = { wet[0].data(), wet[1].data() };
     for (int c = 0; c < numCh; ++c) std::fill (wet[(size_t) c].begin(), wet[(size_t) c].begin() + n, 0.0f);
-    samples.render (wetPtrs, numCh, n);
+    AuxTargets auxScratch;   // routed samples render here first, then get the same Blend / Output gains as the main ones
+    if (auxOut != nullptr)
+        for (int k = 0; k < AuxTargets::kMax; ++k)
+            if (auxOut->numCh[k] > 0 && (int) auxWet[(size_t) k][0].size() >= n)
+            {
+                auxScratch.numCh[k] = std::min (2, auxOut->numCh[k]);
+                for (int c = 0; c < auxScratch.numCh[k]; ++c)
+                {
+                    auxScratch.ch[k][c] = auxWet[(size_t) k][(size_t) c].data();
+                    std::fill (auxWet[(size_t) k][(size_t) c].begin(), auxWet[(size_t) k][(size_t) c].begin() + n, 0.0f);
+                }
+            }
+    samples.render (wetPtrs, numCh, n, auxOut != nullptr ? &auxScratch : nullptr);
 
     const float blend = std::clamp (settings.blend, 0.0f, 1.0f);
     float dryT, wetT;
@@ -183,6 +196,19 @@ void ReplaceEngine::process (float* const* io, int numCh, int n, int64_t timelin
             x[i] = (dry * dg + w[i] * wg) * og;
         }
     }
+    if (auxOut != nullptr)
+        for (int k = 0; k < AuxTargets::kMax; ++k)
+            for (int c = 0; c < auxScratch.numCh[k]; ++c)
+            {
+                float wg = wetGainCur, og = outGainCur;
+                const float* w = auxScratch.ch[k][c];
+                float* y = auxOut->ch[k][c];
+                for (int i = 0; i < n; ++i)
+                {
+                    wg += wStep; og += oStep;
+                    y[i] += w[i] * wg * og;
+                }
+            }
     dryGainCur = dryT; wetGainCur = wetT; outGainCur = outT;
 }
 

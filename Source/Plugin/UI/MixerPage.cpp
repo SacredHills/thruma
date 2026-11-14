@@ -17,15 +17,54 @@ MixerStrip::MixerStrip (ThrumaProcessor& p, int s) : proc (p), slot (s)
     pan.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
     pan.textFromValueFunction = [] (double v) { return v == 0.0 ? juce::String ("C") : (v < 0 ? "L" : "R") + juce::String (std::abs ((int) v)); };
     pan.setPopupDisplayEnabled (true, true, nullptr);
-    pan.onValueChange = [this] { push(); repaint(); };
+    pan.onValueChange = [this] { push(); panValue.setText (pan.getTextFromValue (pan.getValue()), juce::dontSendNotification); };
     addAndMakeVisible (pan);
+
+    // the values under the knob and the fader: click and type ("L30", "R 15", "-20", "C" / "-6", "+2.5")
+    for (auto* l : { &panValue, &dbValue })
+    {
+        l->setEditable (true, true, false);
+        l->setJustificationType (juce::Justification::centred);
+        l->setFont (juce::FontOptions (11.0f));
+        l->setColour (juce::Label::textColourId, colours::textDim);
+        l->setColour (juce::Label::backgroundWhenEditingColourId, colours::background);
+        l->setColour (juce::Label::textWhenEditingColourId, colours::text);
+        l->setColour (juce::Label::outlineWhenEditingColourId, colours::accent);
+        addAndMakeVisible (l);
+    }
+    panValue.setTooltip ("Click to type: L30, R15, -20, C");
+    dbValue.setTooltip ("Click to type the volume in dB (-inf: type -60 or less)");
+    panValue.onTextChange = [this]
+    {
+        auto t = panValue.getText().trim().toUpperCase();
+        double v = 0.0;
+        if (t.startsWithChar ('L')) v = -std::abs (t.substring (1).trim().getDoubleValue());
+        else if (t.startsWithChar ('R')) v = std::abs (t.substring (1).trim().getDoubleValue());
+        else if (t != "C" && t.isNotEmpty()) v = t.getDoubleValue();
+        pan.setValue (juce::jlimit (-100.0, 100.0, v));
+        panValue.setText (pan.getTextFromValue (pan.getValue()), juce::dontSendNotification);
+    };
+    dbValue.onTextChange = [this]
+    {
+        auto t = dbValue.getText().trim().toLowerCase().replace ("db", "").trim();
+        fader.setValue (t.contains ("inf") ? -60.0 : juce::jlimit (-60.0, 12.0, t.getDoubleValue()));
+        dbValue.setText (fader.getTextFromValue (fader.getValue()), juce::dontSendNotification);
+    };
+
+    output.setTooltip ("Where this drum plays: the main output, or one of Thruma's extra outputs (turn those on in your DAW to give each drum its own channel).");
+    output.onChange = [this]
+    {
+        proc.getKitManager().setOutput (slot, juce::jmax (0, output.getSelectedId() - 1));
+        proc.syncMixer();
+    };
+    addAndMakeVisible (output);
 
     fader.setRange (-60.0, 12.0, 0.1);
     fader.setSkewFactorFromMidPoint (-12.0);
     fader.setDoubleClickReturnValue (true, 0.0);
     fader.textFromValueFunction = [] (double v) { return v <= -59.9 ? juce::String ("-inf") : juce::String (v, 1) + " dB"; };
     fader.setPopupDisplayEnabled (true, true, nullptr);
-    fader.onValueChange = [this] { push(); repaint(); };
+    fader.onValueChange = [this] { push(); dbValue.setText (fader.getTextFromValue (fader.getValue()), juce::dontSendNotification); repaint(); };
     addAndMakeVisible (fader);
 
     for (auto* b : { &mute, &solo })
@@ -52,8 +91,24 @@ void MixerStrip::refresh()
     mute.setToggleState (m.mute, juce::dontSendNotification);
     solo.setToggleState (m.solo, juce::dontSendNotification);
     hasSamples = ! m.isEmpty();
+    panValue.setText (pan.getTextFromValue (pan.getValue()), juce::dontSendNotification);
+    dbValue.setText (fader.getTextFromValue (fader.getValue()), juce::dontSendNotification);
+    refreshOutputs();
     name.setColour (juce::Label::textColourId, hasSamples ? colours::text : colours::textDim);
     repaint();
+}
+
+void MixerStrip::refreshOutputs()
+{
+    // "Main", then the extra outputs; ones the host has not turned on are marked
+    output.clear (juce::dontSendNotification);
+    output.addItem ("Main", 1);
+    for (int k = 1; k < proc.getBusCount (false) && k <= AuxTargets::kMax; ++k)
+    {
+        const auto* bus = proc.getBus (false, k);
+        output.addItem ("Out " + juce::String (k + 1) + (bus != nullptr && bus->isEnabled() ? "" : "  (off in DAW)"), k + 1);
+    }
+    output.setSelectedId (proc.getKitManager().getSlot (slot).output + 1, juce::dontSendNotification);
 }
 
 void MixerStrip::push()
@@ -78,13 +133,15 @@ void MixerStrip::resized()
     name.setBounds (r.removeFromTop (30));
     r.removeFromTop (2);
     pan.setBounds (r.removeFromTop (44).withSizeKeepingCentre (44, 44));
-    r.removeFromTop (16);   // pan readout
+    panValue.setBounds (r.removeFromTop (16));
     auto ms = r.removeFromTop (24);
     mute.setBounds (ms.removeFromLeft (ms.getWidth() / 2 - 2));
     ms.removeFromLeft (4);
     solo.setBounds (ms);
-    r.removeFromTop (8);
-    r.removeFromBottom (20);   // dB readout
+    r.removeFromTop (6);
+    output.setBounds (r.removeFromTop (22));
+    r.removeFromTop (6);
+    dbValue.setBounds (r.removeFromBottom (20).expanded (4, 0));
     fader.setBounds (r.removeFromLeft (r.getWidth() - 14));
 }
 
@@ -96,10 +153,6 @@ void MixerStrip::paint (juce::Graphics& g)
     g.setColour (colours::outline);
     g.drawRoundedRectangle (b, 6.0f, 1.0f);
 
-    g.setColour (colours::textDim);
-    g.setFont (juce::FontOptions (11.0f));
-    g.drawText (pan.getTextFromValue (pan.getValue()), pan.getBounds().translated (0, 44).withHeight (16), juce::Justification::centred);
-    g.drawText (fader.getTextFromValue (fader.getValue()), 0, getHeight() - 24, getWidth(), 18, juce::Justification::centred);
 
     // meter next to the fader
     const auto fb = fader.getBounds();
@@ -139,13 +192,14 @@ void MixerPage::rebuild()
 {
     shownPads = proc.getKitManager().getNumUsedPads();
     strips.clear();
-    for (int i = 0; i < kNumInstruments + shownPads; ++i)
-        holder.addAndMakeVisible (strips.add (new MixerStrip (proc, i)));
+    for (int row = 0; row < kNumInstruments + shownPads; ++row)
+        holder.addAndMakeVisible (strips.add (new MixerStrip (proc, slotForRow (row))));
     resized();
 }
 
 void MixerPage::refresh()
 {
+    for (auto* s : strips) s->refreshOutputs();   // the host may have turned outputs on / off
     if (proc.getKitManager().getNumUsedPads() != shownPads) { rebuild(); return; }
     for (auto* s : strips) s->refresh();
 }

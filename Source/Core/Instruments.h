@@ -33,6 +33,16 @@ constexpr int kNumPads = 32;
 constexpr int kNumKitSlots = kNumInstruments + kNumPads;
 constexpr bool isPadSlot (int slot) noexcept { return slot >= kNumInstruments && slot < kNumKitSlots; }
 
+/** The order drums are shown in (Crash 2 next to Crash); the numbers themselves never change. */
+constexpr std::array<int, kNumInstruments> kDrumDisplayOrder { 0, 1, 2, 3, 4, 5, 6, 7, 11, 8, 9, 10 };
+/** Kit slot shown at a list row (drums in display order, then pads) and the row a slot is shown at. */
+constexpr int slotForRow (int row) noexcept { return row >= 0 && row < kNumInstruments ? kDrumDisplayOrder[(size_t) row] : row; }
+constexpr int rowForSlot (int slot) noexcept
+{
+    for (int r = 0; r < kNumInstruments; ++r) if (kDrumDisplayOrder[(size_t) r] == slot) return r;
+    return slot;
+}
+
 /** Tuned defaults for detecting one drum type in its close mic.
     These are the "instrument-specific detection profiles". All times in ms,
     frequencies in Hz, levels in dB. */

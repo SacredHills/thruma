@@ -78,7 +78,7 @@ public:
     juce::UndoManager& getUndoManager() { return undoManager; }
 
     KitManager& getKitManager() { return kitManager; }
-    void rebuildKit();
+    void rebuildKit (bool userChange = true);   // userChange: the project needs saving
     juce::StringArray getMissingSampleFiles() const { return missingFiles; }
     double getCurrentSampleRate() const { return currentRate; }
 
@@ -119,7 +119,9 @@ public:
     /** Which sample each kit slot played last (Player highlights, Samples page). */
     const HitMonitor& getHitMonitor() const { return hitMonitor; }
     /** MIXER: volume / pan / mute / solo per kit slot (from the kit model), and per-slot meters. */
-    void syncMixer();
+    void syncMixer (bool userChange = true);
+    /** Tell the host the plugin's settings changed (so the project saves them). Any thread. */
+    void markStateChanged();
     SlotMixer& getMixer() { return mixer; }
 
     // --- offline analysis: the whole track (from the host) or an imported file ---
@@ -310,7 +312,8 @@ private:
     std::atomic<bool> previewPlaying { false };
     std::atomic<int64_t> previewPos { 0 };
     std::atomic<bool> previewMode { false };
-    bool hostReportsPlayFlag = false;   // audio thread   // imported audio loaded: the stopped playhead is the preview position
+    bool hostReportsPlayFlag = false;   // audio thread
+    std::atomic<bool> stateChanged { false };   // imported audio loaded: the stopped playhead is the preview position
 
     struct MidiSequence { std::vector<MidiBeatNote> notes; };   // sorted by beat
     RcuPublisher<MidiSequence> midiSeqPublisher;

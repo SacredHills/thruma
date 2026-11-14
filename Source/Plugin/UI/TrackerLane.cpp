@@ -233,8 +233,8 @@ void TrackerLane::paint (juce::Graphics& g)
     {
         const float x = posToX ((double) it->position);
         const bool sel = selected.count (it->id) > 0;
-        const auto c = sel ? colours::selection : colours::trigger.withAlpha (it->ghost ? 0.6f : 1.0f);
-        g.setColour (c.withAlpha (sel ? 0.8f : 0.45f));
+        const auto c = sel ? colours::selection : colours::hit.withAlpha (it->ghost ? 0.7f : 1.0f);
+        g.setColour (c.withAlpha (sel ? 0.8f : 0.75f));
         g.drawVerticalLine ((int) x, (float) audio.getY(), (float) audio.getBottom());
         const float top = velToY (it->velocity);
         g.setColour (c);

@@ -94,14 +94,14 @@ void LayerRow::paintOverChildren (juce::Graphics& g)
     if (flashIdx < 0 || flashIdx >= chips.size()) return;
     const auto b = chips[flashIdx]->getBounds().toFloat().expanded (2.0f);
     // the last-played sample keeps a thin outline; a fresh hit lights it up
-    g.setColour (colours::accent.withAlpha (0.25f + 0.55f * flashLevel));
+    g.setColour (colours::hit.withAlpha (0.45f + 0.55f * flashLevel));
     g.drawRoundedRectangle (b, 5.0f, 2.0f);
     if (flashLevel > 0.0f)
     {
-        g.setColour (colours::accent.withAlpha (0.35f * flashLevel));
+        g.setColour (colours::hit.withAlpha (0.6f * flashLevel));
         g.fillRoundedRectangle (b, 5.0f);
     }
-    g.setColour (colours::accent);
+    g.setColour (colours::hit.brighter (0.6f));
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     g.drawText ("PLAYED  vel " + juce::String (juce::roundToInt (flashVel * 127.0f)),
                 juce::Rectangle<int> (getWidth() - 136, (int) b.getY(), 120, (int) b.getHeight()), juce::Justification::centredRight);
@@ -406,7 +406,7 @@ void SamplesPage::paintListBoxItem (int row, juce::Graphics& g, int w, int h, bo
     }
     if (const float fl = row < kNumKitSlots ? rowFlash[(size_t) row] : 0.0f; fl > 0.0f)
     {
-        g.setColour (colours::accent.withAlpha (0.3f * fl));
+        g.setColour (colours::hit.withAlpha (0.65f * fl));
         g.fillRoundedRectangle (2.0f, 1.0f, (float) w - 4.0f, (float) h - 2.0f, 4.0f);
     }
     if (row == kNumInstruments)

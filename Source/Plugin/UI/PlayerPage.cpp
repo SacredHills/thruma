@@ -7,7 +7,7 @@ namespace thruma::ui
 // the room picture is 16:9; the kit sits in it where the artwork places it (measured on 1920 x 1080)
 static constexpr float kRoomAspect = 1920.0f / 1080.0f;
 static constexpr float kKitX = 348.0f / 1920.0f, kKitY = 408.0f / 1080.0f, kKitW = 1194.0f / 1920.0f, kKitH = 672.0f / 1080.0f;
-static constexpr int kPadH = 58, kPadMinW = 100, kPadGap = 8, kMaxPadRows = 4, kFooterH = 26, kTopH = 40;
+static constexpr int kPadH = 54, kPadMinW = 100, kPadGap = 8, kMaxPadRows = 4, kBottomMargin = 10;
 
 namespace
 {
@@ -57,8 +57,9 @@ PlayerPage::PlayerPage (ThrumaProcessor& p) : proc (p)
             if (safe != nullptr && fc.getResult() != juce::File() && safe->proc.getKitManager().loadKitFile (fc.getResult())) safe->kitEdited();
         });
     };
-    kitLabel.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+    kitLabel.setFont (juce::FontOptions (17.0f, juce::Font::bold));
     kitLabel.setColour (juce::Label::textColourId, colours::text);
+    kitLabel.setTooltip ("Click a drum to play it | Right-click to load samples | Drop audio files or a folder on a drum | Drums light up when hit");
     for (auto* c : { (juce::Component*) &importKitBtn, (juce::Component*) &loadKitBtn, (juce::Component*) &kitLabel }) addAndMakeVisible (c);
 
     for (int i = 0; i < kNumKitSlots; ++i) seen[(size_t) i] = proc.getHitMonitor().slots[(size_t) i].count.load();
@@ -67,7 +68,7 @@ PlayerPage::PlayerPage (ThrumaProcessor& p) : proc (p)
 
 void PlayerPage::resized()
 {
-    auto top = getLocalBounds().removeFromTop (kTopH).reduced (12, 6);
+    auto top = getLocalBounds().removeFromTop (46).reduced (14, 8);   // over the picture
     loadKitBtn.setBounds (top.removeFromRight (110));
     top.removeFromRight (8);
     importKitBtn.setBounds (top.removeFromRight (160));
@@ -96,9 +97,11 @@ int PlayerPage::padsHeight() const
 
 juce::Rectangle<float> PlayerPage::imageBounds() const
 {
-    auto area = getLocalBounds().toFloat().withTrimmedTop ((float) kTopH).withTrimmedBottom ((float) (padsHeight() + kFooterH + 8));
-    const float w = juce::jmin (area.getWidth(), area.getHeight() * kRoomAspect);
-    return juce::Rectangle<float> (w, w / kRoomAspect).withCentre (area.getCentre());
+    // the room fills the whole page (cropping what does not fit); anchored at the floor so the kit stays in view
+    const auto area = getLocalBounds().toFloat();
+    const float scale = juce::jmax (area.getWidth() / kRoomAspect, area.getHeight());   // = picture height
+    const float w = scale * kRoomAspect, h = scale;
+    return { area.getCentreX() - 0.5f * w, area.getBottom() - h, w, h };
 }
 
 juce::Rectangle<float> PlayerPage::kitBounds() const
@@ -172,7 +175,7 @@ void PlayerPage::buildMasks()
 juce::Rectangle<float> PlayerPage::padBounds (int pad) const
 {
     const int perRow = padsPerRow();
-    auto strip = getLocalBounds().toFloat().withTrimmedBottom ((float) kFooterH).removeFromBottom ((float) padsHeight()).reduced (12.0f, 0.0f);
+    auto strip = getLocalBounds().toFloat().withTrimmedBottom ((float) kBottomMargin).removeFromBottom ((float) padsHeight()).reduced (14.0f, 0.0f);
     const float w = juce::jmin (130.0f, (strip.getWidth() - (float) (kPadGap * (perRow - 1))) / (float) perRow);
     const int row = pad / perRow, col = pad % perRow;
     return { strip.getX() + (float) col * (w + (float) kPadGap), strip.getY() + (float) row * (float) (kPadH + 6) + 3.0f, w, (float) kPadH };
@@ -244,7 +247,7 @@ void PlayerPage::timerCallback()
 
 void PlayerPage::paint (juce::Graphics& g)
 {
-    g.fillAll (colours::background);
+    g.fillAll (juce::Colours::black);
     const auto ib = imageBounds();
     if (room.isValid()) g.drawImage (room, ib, juce::RectanglePlacement::stretchToFit);
     const auto kb = kitBounds();
@@ -277,7 +280,11 @@ void PlayerPage::paint (juce::Graphics& g)
         g.setOpacity (1.0f);
     }
 
-    // pads (extra kit sounds) under the picture
+    // a soft shade at the top so the kit name and buttons read over the picture
+    g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.65f), 0.0f, 0.0f, juce::Colours::transparentBlack, 0.0f, 70.0f, false));
+    g.fillRect (getLocalBounds().removeFromTop (70));
+
+    // pads (extra kit sounds) over the bottom of the picture
     for (int i = 0; i < numPadTiles(); ++i)
     {
         const int slot = kNumInstruments + i;
@@ -285,7 +292,7 @@ void PlayerPage::paint (juce::Graphics& g)
         const auto m = km.getSlot (slot);
         const bool empty = m.isEmpty() && m.name.isEmpty();
         const float gl = glow[(size_t) slot];
-        g.setColour (colours::panelRaised.interpolatedWith (colours::hitGlow, 0.55f * gl));
+        g.setColour (juce::Colours::black.withAlpha (empty ? 0.35f : 0.6f).interpolatedWith (colours::hitGlow.withAlpha (0.85f), 0.6f * gl));
         g.fillRoundedRectangle (b, 8.0f);
         g.setColour (slot == dropSlot ? colours::trigger : colours::outline);
         if (empty)
@@ -310,10 +317,6 @@ void PlayerPage::paint (juce::Graphics& g)
         g.drawText (m.midiNote >= 0 ? "MIDI " + juce::String (m.midiNote) : juce::String(), b.reduced (6.0f).removeFromBottom (14.0f), juce::Justification::centred);
     }
 
-    g.setColour (colours::textDim);
-    g.setFont (juce::FontOptions (12.0f));
-    g.drawText ("Click a drum to play it  |  Right-click to load samples  |  Drop audio files or a folder on a drum  |  Drums light up when played",
-                getLocalBounds().removeFromBottom (kFooterH), juce::Justification::centred);
 }
 
 void PlayerPage::mouseMove (const juce::MouseEvent& e)

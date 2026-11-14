@@ -150,7 +150,7 @@ void ThrumaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     const auto* kit = kitPublisher.getLatest();
     if (kit == nullptr || rateChanged || std::abs (kit->playRate - sampleRate) > 0.5)
-        rebuildKit();
+        rebuildKit (false);
 
     if (const auto* m = debleedModelPublisher.getLatest())
         if (! m->matches (sampleRate, debleed.getFftSize()))
@@ -231,7 +231,11 @@ void ThrumaProcessor::timerCallback()
     liveModelPublisher.collectGarbage();
     previewPublisher.collectGarbage();
     midiSeqPublisher.collectGarbage();
-    if (previewPlaying.load()) hostBridge.keepAwake();   // hosts that pause idle tracks: keep this one running
+    // hosts that pause plugins on a silent track (RAVENYR): Thruma makes sound of its own with imported audio or
+    // a MIDI file, so keep the track running
+    if (previewPlaying.load() || previewMode.load() || getMidiFileNoteCount() > 0) hostBridge.keepAwake();
+    if (stateChanged.exchange (false))
+        updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
 
     if (pendingRestore != OfflineSource::None && prepared && ! analysing.load()) restoreOfflineAudio();
 
@@ -346,6 +350,7 @@ void ThrumaProcessor::maybeAutoLearn()
                 lm->refDb = refDb;
                 lm->tmpl = tmpl;
                 self->liveModelPublisher.publish (std::move (lm));
+                self->markStateChanged();
             }
             if (deb != nullptr)
                 self->debleedModelPublisher.publish (std::make_unique<DebleedModel> (deb->model));
@@ -852,15 +857,23 @@ void ThrumaProcessor::processChunk (juce::AudioBuffer<float>& buffer, int start,
 }
 
 //==============================================================================
-void ThrumaProcessor::rebuildKit()
+void ThrumaProcessor::rebuildKit (bool userChange)
 {
     missingFiles.clear();
     kitPublisher.publish (kitManager.buildKit (currentRate, &missingFiles));
-    syncMixer();
+    syncMixer (userChange);
 }
 
-void ThrumaProcessor::syncMixer()
+void ThrumaProcessor::markStateChanged()
 {
+    // the host saves plugins' settings when told they changed (RAVENYR only re-saves a plugin then); flushed
+    // from the timer, so a burst of changes is one notification
+    stateChanged.store (true);
+}
+
+void ThrumaProcessor::syncMixer (bool userChange)
+{
+    if (userChange) markStateChanged();
     bool anySolo = false;
     for (int i = 0; i < kNumKitSlots; ++i)
     {
@@ -893,6 +906,7 @@ void ThrumaProcessor::commitTriggerEdit (std::vector<Trigger> newList, const juc
 
 void ThrumaProcessor::publishTriggers()
 {
+    markStateChanged();
     auto snap = std::make_unique<TriggerSnapshot>();
     snap->triggers = triggers.getAll();
     triggerPublisher.publish (std::move (snap));
@@ -1150,6 +1164,7 @@ void ThrumaProcessor::installOfflineAudio (std::shared_ptr<const std::vector<flo
                                            OfflineSource src, std::function<void (const juce::String&)> onDone, bool restoreOnly)
 {
     if (src != OfflineSource::File) offlinePath = {};
+    if (! restoreOnly) markStateChanged();
     previewPlaying.store (false);
     offlineAudio = std::move (audio);
     offlineOrigin = origin;
@@ -1164,6 +1179,7 @@ void ThrumaProcessor::installOfflineAudio (std::shared_ptr<const std::vector<flo
 
 void ThrumaProcessor::dropOfflineAudio()
 {
+    if (offlineSource != OfflineSource::None) markStateChanged();
     offlinePath = {};
     pendingRestore = OfflineSource::None;
     previewPlaying.store (false);
@@ -1332,6 +1348,7 @@ bool ThrumaProcessor::loadMidiFileData (const juce::MemoryBlock& data, const juc
     if (seq->notes.empty()) { message = name + " has no notes."; return false; }
     const auto count = (int) seq->notes.size();
     midiSeqPublisher.publish (std::move (seq));
+    markStateChanged();
     midiFileData = data;
     midiFileName = name;
     message = "Loaded " + name + ": " + juce::String (count) + " notes play the kit with the song (from bar 1).";
@@ -1349,6 +1366,7 @@ void ThrumaProcessor::clearMidiFile()
 {
     if (midiFileName.isEmpty() && midiSeqPublisher.getLatest() == nullptr) return;
     midiSeqPublisher.publish (std::make_unique<MidiSequence>());
+    markStateChanged();
     midiFileData.reset();
     midiFileName = {};
 }
@@ -1386,6 +1404,7 @@ void ThrumaProcessor::setPublishName (const juce::String& name)
 
 void ThrumaProcessor::setLinkedSourceName (const juce::String& name)
 {
+    if (name != linkedSourceName) markStateChanged();
     linkedSourceName = name;
     linkedId.store (name.isNotEmpty() ? LinkHub::getInstance().findSource (name.toStdString()) : -1);
 }
@@ -1478,7 +1497,7 @@ void ThrumaProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (auto kit = root.getChildWithName ("KIT"); kit.isValid())
     {
         kitManager.fromVar (juce::JSON::parse (kit.getProperty ("json").toString()));
-        rebuildKit();   // synchronous: samples are ready before the next (possibly offline) render
+        rebuildKit (false);   // synchronous: samples are ready before the next (possibly offline) render
     }
 
     if (auto trig = root.getChildWithName ("TRIGGERS"); trig.isValid())
@@ -1551,6 +1570,7 @@ void ThrumaProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     undoManager.clearUndoHistory();
     if (prepared) triggerAsyncUpdate();
+    stateChanged.store (false);   // loading a project is not a change to save
 }
 
 } // namespace thruma

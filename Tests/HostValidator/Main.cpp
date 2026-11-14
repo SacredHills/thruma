@@ -319,6 +319,13 @@ int main (int argc, char** argv)
         TestPlayHead ph;
         fresh->setPlayHead (&ph);
         fresh->prepareToPlay (48000.0, 512);
+        struct DirtyWatch : juce::AudioProcessorListener
+        {
+            int changes = 0;
+            void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override {}
+            void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails& d) override { if (d.nonParameterStateChanged) ++changes; }
+        } dirty;
+        fresh->addListener (&dirty);
         playTransport (*fresh, ph, 480000, 12.0, 512);   // 12 s starting at 0:10, a hit every 250 ms
         for (int i = 0; i < 40 && ! inspectState (*fresh).learned; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
         auto st = inspectState (*fresh);
@@ -326,6 +333,9 @@ int main (int argc, char** argv)
         check (st.overview, "track audio recorded for the waveform without pressing anything");
         check (st.learned, "detection auto-learned from the track while playing");
 
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+        check (dirty.changes > 0, "new notes tell the host the project changed (so it saves them): " + juce::String (dirty.changes) + " notifications");
+        fresh->removeListener (&dirty);
         playTransport (*fresh, ph, 480000, 12.0, 512);   // loop the same section
         juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
         st = inspectState (*fresh);

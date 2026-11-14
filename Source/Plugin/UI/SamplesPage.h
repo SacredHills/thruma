@@ -92,8 +92,10 @@ private:
     juce::Slider midiNote;
     juce::Label midiLabel;
     juce::ComboBox rrMode;
-    juce::TextButton autoVelBtn { "Auto velocity" }, clearInstBtn { "Clear" }, saveTdeBtn { "Save TDE..." }, loadTdeBtn { "Load TDE..." };
+    juce::TextButton autoVelBtn { "Auto velocity" }, clearInstBtn { "Clear" }, saveTdeBtn { "Save TDE..." }, loadTdeBtn { "Load TDE..." },
+                     saveAllTdeBtn { "Save All TDE..." }, loadTdesBtn { "Load TDEs..." };
     void loadTde (int slot, const juce::File& f);
+    void loadTdes (const juce::Array<juce::File>& files);
     juce::Viewport layerViewport;
     juce::Component layerHolder;
     juce::OwnedArray<LayerRow> rows;

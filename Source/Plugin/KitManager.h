@@ -91,7 +91,12 @@ public:
     /** Save a drum / pad: its sample files (copied as they are), velocity ranges and round-robin mode. */
     bool saveSlotTde (int slot, const juce::File& dest, juce::String& error);
     /** Load a .tde onto a drum / pad (keeps its MIDI note and mixer settings). */
-    bool loadSlotTde (int slot, const juce::File& tde, juce::String& error);
+    bool loadSlotTde (int slot, const juce::File& tde, juce::String& error, bool setProgress = true);
+    /** Save every drum and pad that has samples into a folder, one "<kit> - <drum>.tde" each. Returns how many were saved. */
+    int saveAllTde (const juce::File& folder, juce::StringArray& errors);
+    /** Load several .tde files at once: each goes onto the drum it was saved from (Snare -> Snare);
+        pads, and a second file for the same drum, go onto new pads. Returns how many were loaded. */
+    int loadTdeFiles (const juce::Array<juce::File>& files, juce::StringArray& errors);
 
     // --- progress of a long load (any thread) ---
     enum class LoadPhase : int { None = 0, Samples = 1, Kit = 2 };

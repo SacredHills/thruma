@@ -371,6 +371,32 @@ void KitManager::fromVar (const juce::var& v)
     }
 }
 
+namespace
+{
+    // Lossless FLAC copy of a sample, for TDE files. Returns false (store the original file)
+    // when FLAC can't hold the data bit-exactly (float or 32-bit samples) or isn't smaller.
+    bool encodeFlac (juce::AudioFormatManager& formats, const juce::File& f, juce::MemoryBlock& out)
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (f));
+        if (reader == nullptr || reader->usesFloatingPointData || reader->lengthInSamples <= 0) return false;
+        const int bits = (int) reader->bitsPerSample;
+        if (bits != 16 && bits != 24) return false;
+        if (reader->numChannels < 1 || reader->numChannels > 8) return false;
+
+        juce::FlacAudioFormat flac;
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::MemoryOutputStream> (out, false);
+        auto writer = flac.createWriterFor (stream, juce::AudioFormatWriterOptions{}
+                                                       .withSampleRate (reader->sampleRate)
+                                                       .withNumChannels ((int) reader->numChannels)
+                                                       .withBitsPerSample (bits)
+                                                       .withQualityOptionIndex (5));
+        if (writer == nullptr) return false;
+        const bool ok = writer->writeFromAudioReader (*reader, 0, -1);
+        writer.reset();   // flushes into 'out'
+        return ok && out.getSize() > 0 && (juce::int64) out.getSize() < f.getSize();
+    }
+}
+
 juce::File KitManager::getTdeLibraryFolder()
 {
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Thruma").getChildFile ("TDE");
@@ -383,7 +409,7 @@ bool KitManager::saveSlotTde (int slot, const juce::File& dest, juce::String& er
     juce::ZipFile::Builder zip;
     auto* root = new juce::DynamicObject();
     root->setProperty ("format", "thruma-tde");
-    root->setProperty ("version", 1);
+    root->setProperty ("version", 2);   // 2: samples may be FLAC (lossless); 1 = WAV only
     root->setProperty ("name", isPadSlot (slot) ? getSlotName (slot) : dest.getFileNameWithoutExtension());
     root->setProperty ("drum", slot < kNumInstruments ? juce::String (getInstrumentName ((Instrument) slot)) : juce::String ("Pad"));
     root->setProperty ("roundRobin", m.rrMode == RoundRobinMode::Random ? "random" : "cycle");
@@ -398,9 +424,21 @@ bool KitManager::saveSlotTde (int slot, const juce::File& dest, juce::String& er
         for (auto& f : m.layers[l].files)
         {
             if (! f.existsAsFile()) { error = "Missing sample: " + f.getFullPathName(); return false; }
-            const auto stored = "samples/" + juce::String (++n).paddedLeft ('0', 3) + "_" + f.getFileName();
-            zip.addFile (f, 6, stored);   // the original file, unchanged
-            files.add (stored);
+            const auto prefix = "samples/" + juce::String (++n).paddedLeft ('0', 3) + "_";
+            juce::MemoryBlock flacData;
+            if (encodeFlac (formats, f, flacData))
+            {
+                // Lossless: decodes to exactly the same samples as the original, about half the size.
+                const auto stored = prefix + f.getFileNameWithoutExtension() + ".flac";
+                zip.addEntry (new juce::MemoryInputStream (std::move (flacData)), 0, stored, f.getLastModificationTime());
+                files.add (stored);
+            }
+            else
+            {
+                const auto stored = prefix + f.getFileName();
+                zip.addFile (f, 6, stored);   // the original file, unchanged
+                files.add (stored);
+            }
         }
         lo->setProperty ("files", files);
         layers.add (juce::var (lo));
@@ -419,15 +457,89 @@ bool KitManager::saveSlotTde (int slot, const juce::File& dest, juce::String& er
     return true;
 }
 
-bool KitManager::loadSlotTde (int slot, const juce::File& tde, juce::String& error)
+namespace
+{
+    bool readTdeHeader (juce::ZipFile& zip, juce::String& json, juce::var& v)
+    {
+        const int idx = zip.getIndexOfFileName ("thruma-tde.json");
+        if (idx < 0) return false;
+        if (std::unique_ptr<juce::InputStream> in { zip.createStreamForEntry (idx) }) json = in->readEntireStreamAsString();
+        v = juce::JSON::parse (json);
+        return v.getProperty ("format", "").toString() == "thruma-tde";
+    }
+
+    int countTdeSamples (const juce::var& v)
+    {
+        int n = 0;
+        if (auto* ls = v.getProperty ("layers", {}).getArray())
+            for (auto& lv : *ls)
+                if (auto* fs = lv.getProperty ("files", {}).getArray()) n += fs->size();
+        return n;
+    }
+}
+
+int KitManager::saveAllTde (const juce::File& folder, juce::StringArray& errors)
+{
+    if (! folder.createDirectory()) { errors.add ("Could not create " + folder.getFullPathName()); return 0; }
+    const auto kit = getKitName().trim();
+    juce::StringArray usedNames;
+    int saved = 0;
+    for (int slot = 0; slot < kNumKitSlots; ++slot)
+    {
+        if (getSlot (slot).isEmpty()) continue;
+        auto base = juce::File::createLegalFileName ((kit.isNotEmpty() ? kit + " - " : juce::String()) + getSlotName (slot));
+        auto name = base;
+        for (int k = 2; usedNames.contains (name, true); ++k) name = base + " " + juce::String (k);
+        usedNames.add (name);
+        juce::String err;
+        if (saveSlotTde (slot, folder.getChildFile (name + ".tde"), err)) ++saved;
+        else errors.add (getSlotName (slot) + ": " + err);
+    }
+    if (saved == 0 && errors.isEmpty()) errors.add ("The kit has no samples to save.");
+    return saved;
+}
+
+int KitManager::loadTdeFiles (const juce::Array<juce::File>& files, juce::StringArray& errors)
+{
+    struct Item { juce::File file; int slot = -1; };
+    std::vector<Item> items;
+    std::array<bool, kNumKitSlots> taken {};
+    int total = 0;
+    int nextPad = kNumInstruments + getNumUsedPads();
+    for (auto& f : files)
+    {
+        juce::ZipFile zip (f);
+        juce::String json; juce::var v;
+        if (! readTdeHeader (zip, json, v)) { errors.add (f.getFileName() + " is not a TDE file."); continue; }
+        int slot = -1;
+        const auto drum = v.getProperty ("drum", "").toString();
+        for (int i = 0; i < kNumInstruments; ++i)
+            if (drum.equalsIgnoreCase (getInstrumentName ((Instrument) i)) && ! taken[(size_t) i]) slot = i;
+        if (slot < 0)
+        {
+            if (nextPad >= kNumKitSlots) { errors.add (f.getFileName() + ": no free pads left."); continue; }
+            slot = nextPad++;
+        }
+        taken[(size_t) slot] = true;
+        total += countTdeSamples (v);
+        items.push_back ({ f, slot });
+    }
+    if (getProgressPhase() != LoadPhase::None) setProgressTotal (total);
+    int loaded = 0;
+    for (auto& it : items)
+    {
+        juce::String err;
+        if (loadSlotTde (it.slot, it.file, err, false)) ++loaded;
+        else errors.add (err);
+    }
+    return loaded;
+}
+
+bool KitManager::loadSlotTde (int slot, const juce::File& tde, juce::String& error, bool setProgress)
 {
     juce::ZipFile zip (tde);
-    const int idx = zip.getIndexOfFileName ("thruma-tde.json");
-    if (idx < 0) { error = tde.getFileName() + " is not a TDE file."; return false; }
-    juce::String json;
-    if (std::unique_ptr<juce::InputStream> in { zip.createStreamForEntry (idx) }) json = in->readEntireStreamAsString();
-    const auto v = juce::JSON::parse (json);
-    if (v.getProperty ("format", "").toString() != "thruma-tde") { error = tde.getFileName() + " is not a TDE file."; return false; }
+    juce::String json; juce::var v;
+    if (! readTdeHeader (zip, json, v)) { error = tde.getFileName() + " is not a TDE file."; return false; }
 
     // unpack once into the library (same file again: reuse it)
     const auto id = juce::String::toHexString ((juce::int64) (json.hashCode64() ^ tde.getSize()));
@@ -455,7 +567,7 @@ bool KitManager::loadSlotTde (int slot, const juce::File& tde, juce::String& err
             if (! lm.files.isEmpty()) layers.push_back (lm);
         }
     if (layers.empty()) { error = tde.getFileName() + " has no samples."; return false; }
-    if (getProgressPhase() != LoadPhase::None) setProgressTotal (all.size());
+    if (setProgress && getProgressPhase() != LoadPhase::None) setProgressTotal (all.size());
     for (auto& f : all) loadSample (f);   // decode now (counts on the loading bar), outside the lock
 
     std::lock_guard<std::recursive_mutex> l (mutex);

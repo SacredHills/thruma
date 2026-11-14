@@ -309,6 +309,41 @@ SamplesPage::SamplesPage (ThrumaProcessor& p) : proc (p)
     addAndMakeVisible (saveTdeBtn);
     addAndMakeVisible (loadTdeBtn);
 
+    saveAllTdeBtn.setTooltip ("Save every drum and pad as its own .tde file, all into one folder.");
+    loadTdesBtn.setTooltip ("Load several .tde files at once - each goes onto the drum it was saved from; pads go onto new pads.");
+    saveAllTdeBtn.onClick = [this]
+    {
+        auto& km = proc.getKitManager();
+        const auto kit = km.getKitName().trim();
+        juce::Component::SafePointer<SamplesPage> safe (this);
+        chooser = std::make_unique<juce::FileChooser> ("Choose a folder for the TDE files",
+                                                       KitManager::getTdeLibraryFolder().getParentDirectory()
+                                                           .getChildFile (juce::File::createLegalFileName (kit.isNotEmpty() ? kit : juce::String ("My Kit"))));
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectDirectories, [safe] (const juce::FileChooser& fc)
+        {
+            if (safe == nullptr || fc.getResult() == juce::File()) return;
+            auto folder = fc.getResult();
+            if (folder.existsAsFile()) folder = folder.getParentDirectory();
+            juce::StringArray errors;
+            const int n = safe->proc.getKitManager().saveAllTde (folder, errors);
+            safe->hint.setText (n > 0 ? "Saved " + juce::String (n) + " TDE files to " + folder.getFileName()
+                                            + (errors.isEmpty() ? juce::String() : " (" + errors[0] + ")")
+                                      : errors[0], juce::dontSendNotification);
+        });
+    };
+    loadTdesBtn.onClick = [this]
+    {
+        juce::Component::SafePointer<SamplesPage> safe (this);
+        chooser = std::make_unique<juce::FileChooser> ("Load TDE files", KitManager::getTdeLibraryFolder().getParentDirectory(), "*.tde");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
+                              [safe] (const juce::FileChooser& fc)
+        {
+            if (safe != nullptr && ! fc.getResults().isEmpty()) safe->loadTdes (fc.getResults());
+        });
+    };
+    addAndMakeVisible (saveAllTdeBtn);
+    addAndMakeVisible (loadTdesBtn);
+
     layerViewport.setViewedComponent (&layerHolder, false);
     layerViewport.setScrollBarsShown (true, false);
     addAndMakeVisible (layerViewport);
@@ -399,7 +434,13 @@ void SamplesPage::resized()
     kitPanel.setBounds (mid);
     auto k = kitPanel.getContentBounds();
     kitName.setBounds (k.removeFromTop (24));
-    auto kb = k.removeFromBottom (28 * 3 + 12);
+    auto kb = k.removeFromBottom (28 * 4 + 18);
+    {
+        auto row = kb.removeFromTop (28); kb.removeFromTop (6);
+        saveAllTdeBtn.setBounds (row.removeFromLeft (row.getWidth() / 2 - 3));
+        row.removeFromLeft (6);
+        loadTdesBtn.setBounds (row);
+    }
     loadBtn.setBounds (kb.removeFromTop (28)); kb.removeFromTop (6);
     saveBtn.setBounds (kb.removeFromTop (28)); kb.removeFromTop (6);
     clearAllBtn.setBounds (kb.removeFromTop (28));
@@ -512,7 +553,9 @@ void SamplesPage::addFiles (const juce::Array<juce::File>& files)
 
 void SamplesPage::filesDropped (const juce::StringArray& files, int, int)
 {
-    juce::Array<juce::File> fs;
+    juce::Array<juce::File> fs, tdes;
+    for (auto& f : files) if (KitManager::isTdeFile (juce::File (f))) tdes.add (juce::File (f));
+    if (tdes.size() > 1) { loadTdes (tdes); return; }   // several TDEs: each onto its own drum
     for (auto& f : files)
     {
         juce::File file (f);
@@ -573,6 +616,21 @@ void SamplesPage::refreshDetail()
     for (int i = 0; i < (int) slot.layers.size(); ++i)
         layerHolder.addAndMakeVisible (rows.add (new LayerRow (*this, i)));
     resized();
+}
+
+void SamplesPage::loadTdes (const juce::Array<juce::File>& files)
+{
+    if (files.size() == 1) { loadTde (selectedInstrument, files[0]); return; }
+    auto errors = std::make_shared<juce::StringArray>();
+    auto n = std::make_shared<int> (0);
+    juce::Component::SafePointer<SamplesPage> safe (this);
+    proc.runKitJob ([files, errors, n] (KitManager& km) { *n = km.loadTdeFiles (files, *errors); }, [safe, errors, n]
+    {
+        if (safe == nullptr) return;
+        safe->hint.setText ("Loaded " + juce::String (*n) + " TDE files" + (errors->isEmpty() ? juce::String() : " (" + (*errors)[0] + ")"),
+                            juce::dontSendNotification);
+        safe->refreshNow();
+    });
 }
 
 } // namespace thruma::ui

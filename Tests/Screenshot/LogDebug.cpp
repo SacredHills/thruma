@@ -719,17 +719,90 @@ int main()
         bool same = t1.layers.size() == 2 && t1.rrMode == RoundRobinMode::Random && t1.midiNote == 48
                     && std::abs (t1.layers[0].velHi - 0.37f) < 1.0e-4f && std::abs (t1.layers[1].velLo - 0.38f) < 1.0e-4f
                     && t1.layers[0].files.size() == 2 && t1.layers[1].files.size() == 3;
+        auto decode = [&] (const juce::File& f, juce::AudioBuffer<float>& b)
+        {
+            std::unique_ptr<juce::AudioFormatReader> r (km.getFormatManager().createReaderFor (f));
+            if (r == nullptr) return false;
+            b.setSize ((int) r->numChannels, (int) r->lengthInSamples);
+            return r->read (&b, 0, (int) r->lengthInSamples, 0, true, true);
+        };
+        bool allFlac = same;
         if (same)
             for (int i = 0; i < 3; ++i)
             {
-                juce::MemoryBlock a, b;
-                hard.files[i].loadFileAsData (a); t1.layers[1].files[i].loadFileAsData (b);
-                same = same && a == b && t1.layers[1].files[i].isAChildOf (KitManager::getTdeLibraryFolder());
+                juce::AudioBuffer<float> a, b;
+                const auto& got = t1.layers[1].files[i];
+                bool eq = decode (hard.files[i], a) && decode (got, b) && a.getNumSamples() == b.getNumSamples() && a.getNumChannels() == b.getNumChannels();
+                for (int c = 0; eq && c < a.getNumChannels(); ++c)
+                    eq = std::memcmp (a.getReadPointer (c), b.getReadPointer (c), sizeof (float) * (size_t) a.getNumSamples()) == 0;
+                same = same && eq && got.isAChildOf (KitManager::getTdeLibraryFolder());
+                allFlac = allFlac && got.hasFileExtension ("flac");
             }
-        check (same, "TDE loads onto another drum with the same velocity layers, round robin and identical samples (keeps that drum's MIDI note)");
+        check (same, "TDE loads onto another drum with the same velocity layers, round robin and bit-identical samples (keeps that drum's MIDI note)");
+        juce::int64 wavBytes = 0;
+        for (auto& f : soft.files) wavBytes += f.getSize();
+        for (auto& f : hard.files) wavBytes += f.getSize();
+        check (allFlac && tde.getSize() < wavBytes * 7 / 10, "TDE stores samples as lossless FLAC: " + juce::String (tde.getSize()) + " bytes vs " + juce::String (wavBytes) + " bytes of WAV");
+        {
+            // 32-bit float WAVs can't go in FLAC bit-exactly: they are stored unchanged.
+            juce::File ff = d.getChildFile ("float_hit.wav");
+            {
+                juce::AudioBuffer<float> b (1, 2000);
+                for (int i = 0; i < 2000; ++i) b.setSample (0, i, 0.5f * std::sin ((float) i * 0.07f));
+                juce::WavAudioFormat fmt;
+                std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (ff), 48000.0, 1, 32, {}, 0));
+                w->writeFromAudioSampleBuffer (b, 0, 2000);
+            }
+            KitManager::SlotModel fm; KitManager::LayerModel fl; fl.files = { ff }; fm.layers = { fl };
+            km.setSlot ((int) Instrument::Ride, fm);
+            const auto ftde = d.getChildFile ("Float.tde");
+            km.saveSlotTde ((int) Instrument::Ride, ftde, err);
+            km.loadSlotTde ((int) Instrument::China, ftde, err);
+            const auto ch = km.getSlot ((int) Instrument::China);
+            juce::MemoryBlock a, b;
+            ff.loadFileAsData (a);
+            if (! ch.layers.empty() && ! ch.layers[0].files.isEmpty()) ch.layers[0].files[0].loadFileAsData (b);
+            check (a.getSize() > 0 && a == b, "32-bit float samples are kept as the original WAV inside the TDE");
+        }
         const auto firstFolder = t1.layers[0].files[0].getParentDirectory();
         km.loadSlotTde ((int) Instrument::Tom2, tde, err);
         check (km.getSlot ((int) Instrument::Tom2).layers[0].files[0].getParentDirectory() == firstFolder, "loading the same TDE again reuses its unpacked samples");
+        {
+            // Save all + load many
+            km.setKitName ("Test Kit");
+            KitManager::SlotModel kick; KitManager::LayerModel kl; kl.files = { mk ("Kick_1", 0.9f) }; kick.layers = { kl };
+            km.setSlot ((int) Instrument::Kick, kick);
+            const int padSlot = kNumInstruments + km.getNumUsedPads();
+            KitManager::SlotModel cow; KitManager::LayerModel cl; cl.files = { mk ("Cowbell_1", 0.5f) }; cow.layers = { cl };
+            km.setSlot (padSlot, cow); km.setSlotName (padSlot, "Cowbell");
+            const auto all = d.getChildFile ("AllTde");
+            juce::StringArray errs;
+            int expected = 0;
+            for (int i = 0; i < kNumKitSlots; ++i) if (! km.getSlot (i).isEmpty()) ++expected;
+            const int nSaved = km.saveAllTde (all, errs);
+            const auto saved = all.findChildFiles (juce::File::findFiles, false, "*.tde");
+            check (nSaved == expected && saved.size() == expected && all.getChildFile ("Test Kit - Snare.tde").existsAsFile()
+                       && all.getChildFile ("Test Kit - Cowbell.tde").existsAsFile(),
+                   "Save All writes one TDE per drum/pad into a folder: " + juce::String (saved.size()) + " files");
+
+            std::unique_ptr<ThrumaProcessor> p2 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+            auto& k2 = p2->getKitManager();
+            errs.clear();
+            const int nLoaded = k2.loadTdeFiles (juce::Array<juce::File> (saved.getRawDataPointer(), saved.size()), errs);
+            bool ok = nLoaded == expected && errs.isEmpty()
+                      && k2.getSlot ((int) Instrument::Kick).layers.size() == 1
+                      && k2.getSlot ((int) Instrument::Snare).layers.size() == 2
+                      && k2.getSlot ((int) Instrument::Snare).rrMode == RoundRobinMode::Random;
+            bool cowOnPad = false;
+            for (int i = kNumInstruments; i < kNumKitSlots; ++i) if (k2.getSlotName (i) == "Cowbell" && ! k2.getSlot (i).isEmpty()) cowOnPad = true;
+            check (ok && cowOnPad, "Load TDEs puts each file back on its own drum (and pads on pads) in one go: " + juce::String (nLoaded) + " loaded");
+            // two snare files at once: the second goes on a pad, nothing lost
+            errs.clear();
+            std::unique_ptr<ThrumaProcessor> p3 (dynamic_cast<ThrumaProcessor*> (createPluginFilter()));
+            auto& k3 = p3->getKitManager();
+            const int n3 = k3.loadTdeFiles ({ tde, all.getChildFile ("Test Kit - Snare.tde") }, errs);
+            check (n3 == 2 && ! k3.getSlot ((int) Instrument::Snare).isEmpty() && k3.getNumUsedPads() == 1, "two TDEs for the same drum: the second lands on a pad");
+        }
         juce::File bad = d.getChildFile ("not.tde"); bad.replaceWithText ("hello");
         check (! km.loadSlotTde ((int) Instrument::Tom3, bad, err) && err.isNotEmpty(), "a broken TDE is refused with a message: " + err);
 

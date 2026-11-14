@@ -578,7 +578,16 @@ void PlayerPage::filesDropped (const juce::StringArray& paths, int x, int y)
 {
     dropSlot = -1;
     const int slot = slotAt ({ (float) x, (float) y });
-    juce::Array<juce::File> files;
+    juce::Array<juce::File> files, tdes;
+    for (auto& path : paths) if (KitManager::isTdeFile (juce::File (path))) tdes.add (juce::File (path));
+    if (tdes.size() > 1 || (tdes.size() == 1 && slot < 0))
+    {
+        // several TDEs (or one dropped off the drums): each goes onto the drum it was saved from
+        juce::Component::SafePointer<PlayerPage> safe (this);
+        proc.runKitJob ([tdes] (KitManager& km) { juce::StringArray errors; km.loadTdeFiles (tdes, errors); },
+                        [safe] { if (safe != nullptr) safe->kitLoaded(); });
+        return;
+    }
     for (auto& path : paths)
     {
         juce::File f (path);

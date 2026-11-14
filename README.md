@@ -30,7 +30,7 @@ Thruma detects the hits on a drum mic and replaces or layers them with your own 
 - Import a MIDI file into Thruma: it plays the kit in time with the song, no analysis.
 - **PLAYER** page: the kit as a picture (two crashes). Click to play, right-click or drop files to load samples, drums light up when hit; extra sounds go on up to 32 pads.
 - **MIXER** page: volume, pan, mute and solo for every drum and pad, with meters, typed-in values, and routing to 16 extra stereo outputs (multi-out instrument).
-- **TDE files:** save one drum's samples, velocity layers and round robin as a single `.tde` file (like Drumagog GOG) and load it onto any drum.
+- **TDE files:** save one drum's samples, velocity layers and round robin as a single `.tde` file (like Drumagog GOG) and load it onto any drum. Samples are stored as lossless FLAC. Save All / Load TDEs handle a whole kit at once.
 
 **Debleed** (spectral processing, not a gate)
 - Models the target drum per frequency bin: its spectrum is captured at each hit and then decays at the drum's learned rate. Everything this model explains is kept. Bleed is estimated from a reference mic when one is available, otherwise from energy the model cannot explain (blind mode).
